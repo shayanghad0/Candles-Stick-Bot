@@ -1,0 +1,16 @@
+[
+  {
+    "symbol": "XAUUSD",
+    "direction": "bull",
+    "entry_price": 4056.37,
+    "entry_time": "2026-08-04 03:43:00",
+    "tp_price": 4058.17,
+    "sl_price": 4054.87,
+    "tp_points": 180,
+    "sl_points": 150,
+    "point_size": 0.01,
+    "status": "SL_HIT",
+    "exit_price": 4054.87,
+    "exit_time": "2026-08-04 03:52:00"
+  }
+]
