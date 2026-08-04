@@ -171,6 +171,29 @@ def get_live_tick(mt5, symbol):
     }
 
 
+def get_forming_candle(mt5, symbol, tf_key):
+    """Get the current still-forming candle (open/high/low/close from live ticks)."""
+    import pandas as pd
+    tf_const = getattr(mt5, f"TIMEFRAME_{tf_key}")
+    rates = mt5.copy_rates_from_pos(symbol, tf_const, 0, 1)
+    if rates is None or len(rates) < 1:
+        return None
+    rate = rates[0]
+    info = mt5.symbol_info(symbol)
+    digits = info.digits if info else 5
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return None
+    last_price = tick.last if tick.last else tick.bid
+    return {
+        "time": datetime.fromtimestamp(rate["time"]),
+        "open": round(rate["open"], digits),
+        "high": round(rate["high"], digits),
+        "low": round(rate["low"], digits),
+        "close": round(last_price, digits),
+    }
+
+
 # --------------------------------------------------------------------------
 # Candle simulator
 # --------------------------------------------------------------------------
@@ -388,10 +411,87 @@ def export_trade_result_chart(trade_result, history):
 
 
 # --------------------------------------------------------------------------
-# Trade following (simulated - never touches the real MT5 account)
+# Trade following - real MT5 orders
 # --------------------------------------------------------------------------
 
-def open_trade(symbol, direction, entry_price, entry_time, point_size, tp_points=TP_POINTS, sl_points=SL_POINTS):
+def mt5_open_position(mt5, symbol, direction, lot, tp_price, sl_price):
+    """Send a market order to MT5. Returns (ticket, price) or (None, error)."""
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return None, f"symbol_info returned None for {symbol}"
+    if not info.visible:
+        mt5.symbol_select(symbol, True)
+
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return None, "symbol_info_tick returned None"
+
+    if direction == "bull":
+        order_type = mt5.ORDER_TYPE_BUY
+        price = tick.ask
+    else:
+        order_type = mt5.ORDER_TYPE_SELL
+        price = tick.bid
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": lot,
+        "type": order_type,
+        "price": price,
+        "tp": tp_price,
+        "sl": sl_price,
+        "deviation": 20,
+        "magic": 234000,
+        "comment": "engulfing",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_FOK,
+    }
+    result = mt5.order_send(request)
+    if result is None:
+        return None, "order_send returned None"
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        return None, f"retcode={result.retcode} comment={result.comment}"
+    return result.order, result.price
+
+
+def mt5_close_position(mt5, symbol, direction, ticket, lot):
+    """Close an open position by sending an opposite market order."""
+    # Find position by symbol and direction
+    positions = mt5.positions_get(symbol=symbol)
+    if positions is None or len(positions) == 0:
+        return None, f"No positions found for {symbol}"
+    
+    # Find the position matching our direction
+    pos = None
+    for p in positions:
+        if (direction == "bull" and p.type == mt5.ORDER_TYPE_BUY) or \
+           (direction == "bear" and p.type == mt5.ORDER_TYPE_SELL):
+            pos = p
+            break
+    
+    if pos is None:
+        return None, f"No {direction} position found for {symbol}"
+    
+    # Use TRADE_ACTION_CLOSE_BY to close the position
+    request = {
+        "action": mt5.TRADE_ACTION_CLOSE_BY,
+        "position": pos.ticket,
+        "symbol": symbol,
+        "volume": lot,
+        "deviation": 20,
+        "magic": 234000,
+        "comment": "engulfing close",
+    }
+    result = mt5.order_send(request)
+    if result is None:
+        return None, "order_send returned None"
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        return None, f"retcode={result.retcode} comment={result.comment}"
+    return result.order, pos.price
+
+def open_trade(symbol, direction, entry_price, entry_time, point_size, lot, ticket=None,
+               tp_points=TP_POINTS, sl_points=SL_POINTS):
     if direction == "bull":
         tp_price = entry_price + tp_points * point_size
         sl_price = entry_price - sl_points * point_size
@@ -402,6 +502,7 @@ def open_trade(symbol, direction, entry_price, entry_time, point_size, tp_points
         "symbol": symbol, "direction": direction, "entry_price": entry_price,
         "entry_time": _ts_str(entry_time), "tp_price": tp_price, "sl_price": sl_price,
         "tp_points": tp_points, "sl_points": sl_points, "point_size": point_size,
+        "lot": lot, "ticket": ticket,
         "status": "open", "tp_status": None, "sl_status": None,
         "current_price": entry_price,
     }
@@ -442,7 +543,7 @@ def pnl_for(trade):
 # --------------------------------------------------------------------------
 
 def render_ascii_chart(candles, height=CHART_HEIGHT):
-    """Small in-terminal candlestick chart using block characters."""
+    """Small in-terminal candlestick chart using block characters. Forming candle shown in cyan."""
     if not candles:
         return Text("(no candle data yet)", style="dim")
 
@@ -458,7 +559,11 @@ def render_ascii_chart(candles, height=CHART_HEIGHT):
 
     grid = [[(" ", None) for _ in candles] for _ in range(height)]
     for i, c in enumerate(candles):
-        color = "green" if c["close"] >= c["open"] else "red"
+        is_forming = c.get("forming", False)
+        if is_forming:
+            color = "cyan"
+        else:
+            color = "green" if c["close"] >= c["open"] else "red"
         top_row, bot_row = row_for(c["high"]), row_for(c["low"])
         body_top, body_bot = row_for(max(c["open"], c["close"])), row_for(min(c["open"], c["close"]))
         for r in range(top_row, bot_row + 1):
@@ -476,7 +581,11 @@ def render_ascii_chart(candles, height=CHART_HEIGHT):
                 row_text.append("  ")
         lines.append(row_text)
 
+    # Mark forming candle in axis
+    forming_idx = len(candles) - 1 if candles and candles[-1].get("forming") else -1
     axis = Text(f"  high {top:.3f}" + " " * max(0, len(candles) * 2 - 20) + f"low {bottom:.3f}", style="dim")
+    if forming_idx >= 0:
+        lines.append(Text("  " + "  " * forming_idx + "\u25bc forming", style="cyan"))
     return Group(*lines, axis)
 
 
@@ -537,6 +646,7 @@ class Dashboard:
 
         trades_table = Table(box=None, pad_edge=False, header_style="bold cyan")
         trades_table.add_column("Side")
+        trades_table.add_column("Lot", justify="right")
         trades_table.add_column("Entry", justify="right")
         trades_table.add_column("Current", justify="right")
         trades_table.add_column("PnL/pt", justify="right")
@@ -552,6 +662,7 @@ class Dashboard:
                 status = t["status"]
                 trades_table.add_row(
                     f"[{side_color}]{side}[/{side_color}]",
+                    f"{t.get('lot', 0.01):.2f}",
                     f"{t['entry_price']:.3f}",
                     f"{t['current_price']:.3f}",
                     f"[{pnl_color}]{pnl_pts:+.1f}[/{pnl_color}]",
@@ -559,7 +670,7 @@ class Dashboard:
                     status,
                 )
         else:
-            trades_table.add_row("-", "-", "-", "-", "-", "no trades yet")
+            trades_table.add_row("-", "-", "-", "-", "-", "-", "no trades yet")
 
         events_text = "\n".join(self.events) if self.events else "[dim](none yet)[/dim]"
 
@@ -583,18 +694,31 @@ class Dashboard:
         return Panel(body, title="Engulfing Watcher", border_style="cyan")
 
 
-def wait_with_countdown(live, dash, seconds, label, tick_poller=None):
-    """Wait with countdown, optionally polling live ticks every 0.5s."""
+def wait_with_countdown(live, dash, seconds, label, tick_poller=None, candle_updater=None):
+    """Wait with countdown, polling live ticks and updating chart with forming candle."""
     seconds = max(0, seconds)
     remaining = seconds
     poll_interval = 0.5
-    next_tick_poll = 0.0
     while remaining > 0:
         dash.status_line = f"[yellow]{label}[/yellow]  ({int(remaining)}s left)"
         if tick_poller:
             tick = tick_poller()
             if tick:
                 dash.live_tick = tick
+        if candle_updater:
+            forming = candle_updater()
+            if forming:
+                # Append forming candle to chart if not already there, or update last
+                if dash.chart_candles and dash.chart_candles[-1].get("forming"):
+                    dash.chart_candles[-1] = {**forming, "forming": True}
+                elif dash.chart_candles:
+                    dash.chart_candles.append({**forming, "forming": True})
+                    # Keep only CHART_CANDLES + 1 (the forming one)
+                    if len(dash.chart_candles) > CHART_CANDLES + 1:
+                        dash.chart_candles = dash.chart_candles[-(CHART_CANDLES + 1):]
+                # Update OHLC preview with forming candle close
+                dash.ohlc = forming
+                dash.candle_ts = "forming"
         live.update(dash.render())
         step = min(poll_interval, remaining)
         time.sleep(step)
@@ -615,7 +739,8 @@ def seconds_until_next_close(tf_seconds):
     return wait_seconds, datetime.fromtimestamp(next_boundary)
 
 
-def handle_candle_close(live, dash, symbol, history, ts, active_trade, point_size):
+def handle_candle_close(live, dash, symbol, history, ts, active_trade, point_size,
+                         mt5_instance=None, lot=0.01):
     curr = history[-1]
     prev = history[-2]
 
@@ -636,6 +761,18 @@ def handle_candle_close(live, dash, symbol, history, ts, active_trade, point_siz
             active_trade["tp_status"] = "hit" if outcome == "tp" else "Canceled by SL"
             active_trade["sl_status"] = "hit" if outcome == "sl" else "Canceled by TP"
             active_trade["ambiguous"] = ambiguous
+
+            # close the real MT5 position
+            if mt5_instance and active_trade.get("ticket"):
+                close_ticket, close_price = mt5_close_position(
+                    mt5_instance, symbol, active_trade["direction"],
+                    active_trade["ticket"], active_trade["lot"])
+                if close_ticket:
+                    active_trade["current_price"] = close_price
+                    dash.add_event(f"[green]MT5 position closed[/green] ticket={close_ticket} "
+                                   f"price={close_price:.5f}")
+                else:
+                    dash.add_event(f"[red]MT5 close failed: {close_price}[/red]")
 
             update_signal_json_status(active_trade["entry_time"], active_trade["tp_status"],
                                        active_trade["sl_status"], status, ambiguous)
@@ -658,12 +795,26 @@ def handle_candle_close(live, dash, symbol, history, ts, active_trade, point_siz
     if result is not None:
         if active_trade is None:
             entry_price = curr["close"]
-            active_trade = open_trade(symbol, result, entry_price, curr["time"], point_size)
+            active_trade = open_trade(symbol, result, entry_price, curr["time"], point_size, lot)
+
+            # place real MT5 order
+            if mt5_instance:
+                mt5_ticket, mt5_price = mt5_open_position(
+                    mt5_instance, symbol, result, lot,
+                    active_trade["tp_price"], active_trade["sl_price"])
+                if mt5_ticket:
+                    active_trade["ticket"] = mt5_ticket
+                    active_trade["entry_price"] = mt5_price
+                    dash.add_event(f"[green]MT5 order filled[/green] ticket={mt5_ticket} "
+                                   f"price={mt5_price:.5f}")
+                else:
+                    dash.add_event(f"[red]MT5 order FAILED: {mt5_price}[/red]")
+
             json_path = save_signal_json(symbol, result, prev, curr, ts, active_trade)
             export_chart_png(symbol, result, history, ts)
             dash.trades.append(active_trade)
             label = "LONG" if result == "bull" else "SHORT"
-            dash.add_event(f"New [bold]{label}[/bold] trade: entry {entry_price:.3f} "
+            dash.add_event(f"New [bold]{label}[/bold] trade ({lot} lot): entry {active_trade['entry_price']:.3f} "
                             f"TP {active_trade['tp_price']:.3f} SL {active_trade['sl_price']:.3f}")
         else:
             dash.add_event(f"{'Bullish' if result == 'bull' else 'Bearish'} pattern seen - "
@@ -684,6 +835,7 @@ def run_live():
     symbol = Prompt.ask("Symbol", default="EURUSD").strip().upper()
     tf_key = Prompt.ask("Timeframe", choices=list(TIMEFRAMES.keys()), default="M1")
     tf_seconds = TIMEFRAMES[tf_key]
+    lot = float(Prompt.ask("Lot size (e.g. 0.01, 0.1, 1.0)", default="0.01"))
 
     mt5 = connect_live(login, password, server)
 
@@ -704,14 +856,16 @@ def run_live():
                 wait_s, next_close = seconds_until_next_close(tf_seconds)
                 wait_with_countdown(live, dash, wait_s + 2,
                                      f"Next {tf_key} candle closes at {next_close.strftime('%H:%M:%S')}",
-                                     tick_poller=lambda: get_live_tick(mt5, symbol))
+                                     tick_poller=lambda: get_live_tick(mt5, symbol),
+                                     candle_updater=lambda: get_forming_candle(mt5, symbol, tf_key))
                 history = get_live_closed_candles(mt5, symbol, tf_key, n_closed=CHART_CANDLES)
                 if not history or len(history) < 2:
                     dash.add_event("[yellow]Not enough candle data, skipping[/yellow]")
                     live.update(dash.render())
                     continue
                 active_trade = handle_candle_close(live, dash, symbol, history, history[-1]["time"],
-                                                    active_trade, point_size)
+                                                    active_trade, point_size,
+                                                    mt5_instance=mt5, lot=lot)
     except KeyboardInterrupt:
         console.print("\n[bold]Stopped by user.[/bold]")
     finally:
