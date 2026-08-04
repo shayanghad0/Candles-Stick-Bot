@@ -15,10 +15,27 @@ install locations for terminal64.exe and passes that path to MT5,
 instead of relying on whichever terminal happens to be open - this
 avoids the "stuck session" auth errors from a stale terminal.
 
-On every detected pattern the script now:
-  1. Appends a record to a JSON log file (signals/engulfing_signals.json).
+On every detected pattern the script:
+  1. Appends/updates a record in a JSON log file
+     (signals/engulfing_signals.json) - entry_price/tp_price/sl_price
+     get filled in once a trade is opened, and tp_status/sl_status/
+     status get filled in once TP or SL is hit.
   2. Exports a PNG chart of the last 10 candles with a big up/down
      arrow marking the pattern candle (signals/charts/...).
+
+Trade following is a SIMULATED/paper trade the script tracks in
+software only - it never sends a real order to your MT5 account.
+Only one trade is followed at a time: if a new signal fires while a
+trade is still open, it gets logged but not followed (status stays
+"open" with null tp/sl) until the active trade resolves.
+
+IMPORTANT LIMITATION - same-candle TP/SL ambiguity:
+OHLC data alone can't tell you which level was actually touched
+FIRST inside a single candle. If one bar's high/low range spans both
+your TP and SL, the script now conservatively assumes SL was hit
+first (the worse outcome) rather than always crediting TP - assuming
+TP first would silently inflate the win rate. This is flagged in the
+log as "ambiguous": true.
 
 Requirements:
     pip install rich MetaTrader5 pandas matplotlib
@@ -54,7 +71,6 @@ TIMEFRAMES = {
 
 SIGNALS_DIR = "signals"
 JSON_LOG_PATH = os.path.join(SIGNALS_DIR, "engulfing_signals.json")
-TRADES_JSON_PATH = os.path.join(SIGNALS_DIR, "trade_results.json")
 CHARTS_DIR = os.path.join(SIGNALS_DIR, "charts")
 
 # Follow-the-trade thresholds (in broker "points", i.e. the smallest
@@ -93,7 +109,7 @@ def print_terminal_panel(path, attempt=None, retries=None, connected=False, logi
     """Single, updating panel showing the auto-terminal-detection status."""
     lines = []
     if path:
-        lines.append(f"[green]Terminal:[/green] auto-detected")
+        lines.append("[green]Terminal:[/green] auto-detected")
         lines.append(f"[bold]Path:[/bold] {path}")
     else:
         lines.append("[yellow]Terminal:[/yellow] not found automatically - using default launch")
@@ -260,12 +276,16 @@ def classify_direction(row):
     return "Doji", "yellow"
 
 
+def _ts_str(ts):
+    return ts.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts, "strftime") else str(ts)
+
+
 # --------------------------------------------------------------------------
 # Trade following (TP/SL tracking after a signal fires)
 # --------------------------------------------------------------------------
 
 def open_trade(symbol, direction, entry_price, entry_time, point_size,
-                 tp_points=TP_POINTS, sl_points=SL_POINTS):
+                tp_points=TP_POINTS, sl_points=SL_POINTS):
     if direction == "bull":
         tp_price = entry_price + tp_points * point_size
         sl_price = entry_price - sl_points * point_size
@@ -290,55 +310,59 @@ def open_trade(symbol, direction, entry_price, entry_time, point_size,
 
 
 def check_trade(trade, candle):
-    """Check if this candle's high/low touched TP or SL. Returns 'tp', 'sl', or None."""
+    """Check if this candle's high/low touched TP or SL.
+    Returns (outcome, ambiguous) where outcome is 'tp', 'sl', or None.
+
+    BUGFIX: OHLC alone can't tell you which level was touched FIRST
+    inside one candle. If BOTH are within this candle's range, we now
+    conservatively count it as SL (the worse outcome) instead of
+    always assuming TP - always assuming TP silently inflates the
+    win rate whenever a bar is wide enough to span both levels.
+    """
     if trade["direction"] == "bull":
-        if candle["high"] >= trade["tp_price"]:
-            return "tp"
-        if candle["low"] <= trade["sl_price"]:
-            return "sl"
+        hit_tp = candle["high"] >= trade["tp_price"]
+        hit_sl = candle["low"] <= trade["sl_price"]
     else:
-        if candle["low"] <= trade["tp_price"]:
-            return "tp"
-        if candle["high"] >= trade["sl_price"]:
-            return "sl"
-    return None
+        hit_tp = candle["low"] <= trade["tp_price"]
+        hit_sl = candle["high"] >= trade["sl_price"]
+
+    if hit_tp and hit_sl:
+        return "sl", True   # ambiguous - assume the worse outcome
+    if hit_tp:
+        return "tp", False
+    if hit_sl:
+        return "sl", False
+    return None, False
 
 
-def save_trade_result_json(trade_result):
-    os.makedirs(SIGNALS_DIR, exist_ok=True)
-
-    data = []
-    if os.path.exists(TRADES_JSON_PATH):
-        try:
-            with open(TRADES_JSON_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            data = []
-
-    data.append(trade_result)
-    with open(TRADES_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, default=str)
-
-    return TRADES_JSON_PATH
-
-
-def report_trade_result(trade, outcome, hit_candle):
+def report_trade_result(trade, outcome, hit_candle, ambiguous):
     exit_price = trade["tp_price"] if outcome == "tp" else trade["sl_price"]
     status = "TP_HIT" if outcome == "tp" else "SL_HIT"
+
+    if outcome == "tp":
+        tp_status, sl_status = "hit", "Canceled by TP"
+    else:
+        tp_status, sl_status = "Canceled by SL", "hit"
 
     trade_result = dict(trade)
     trade_result["status"] = status
     trade_result["exit_price"] = exit_price
     trade_result["exit_time"] = _ts_str(hit_candle["time"])
+    trade_result["tp_status"] = tp_status
+    trade_result["sl_status"] = sl_status
+    trade_result["ambiguous"] = ambiguous
 
-    json_path = save_trade_result_json(trade_result)
+    update_signal_json_status(trade["entry_time"], tp_status, sl_status, status, ambiguous)
 
     color = "green" if outcome == "tp" else "red"
     label = "TAKE PROFIT HIT" if outcome == "tp" else "STOP LOSS HIT"
+    amb_note = "\n[yellow]Note: this candle touched BOTH TP and SL - counted as SL (conservative).[/yellow]" if ambiguous else ""
     console.print(Panel(
         f"[bold]{trade['symbol']} {trade['direction'].upper()} trade -> {label}[/bold]\n"
         f"Entry: {trade['entry_price']:.3f}   Exit: {exit_price:.3f}\n"
-        f"[dim]Saved -> {json_path}[/dim]",
+        f"TP Status: {tp_status}   SL Status: {sl_status}"
+        f"{amb_note}\n"
+        f"[dim]Updated -> {JSON_LOG_PATH}[/dim]",
         border_style=color,
         title="Trade closed",
     ))
@@ -349,10 +373,6 @@ def report_trade_result(trade, outcome, hit_candle):
 # --------------------------------------------------------------------------
 # JSON logging + PNG chart export (on every detected pattern)
 # --------------------------------------------------------------------------
-
-def _ts_str(ts):
-    return ts.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts, "strftime") else str(ts)
-
 
 def save_signal_json(symbol, pattern, prev, curr, ts):
     os.makedirs(SIGNALS_DIR, exist_ok=True)
@@ -365,6 +385,13 @@ def save_signal_json(symbol, pattern, prev, curr, ts):
         "prev_close": prev["close"],
         "curr_open": curr["open"],
         "curr_close": curr["close"],
+        "entry_price": curr["close"],
+        "tp_price": None,
+        "sl_price": None,
+        "status": "open",
+        "tp_status": None,
+        "sl_status": None,
+        "ambiguous": None,
     }
 
     data = []
@@ -380,6 +407,52 @@ def save_signal_json(symbol, pattern, prev, curr, ts):
         json.dump(data, f, indent=2, default=str)
 
     return JSON_LOG_PATH
+
+
+def update_signal_json_with_trade(ts, trade):
+    """Update the signal entry with trade setup info (TP/SL prices, status)."""
+    if not os.path.exists(JSON_LOG_PATH):
+        return
+    try:
+        with open(JSON_LOG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return
+
+    time_str = _ts_str(ts)
+    for entry in reversed(data):
+        if entry.get("time") == time_str:
+            entry["entry_price"] = trade["entry_price"]
+            entry["tp_price"] = trade["tp_price"]
+            entry["sl_price"] = trade["sl_price"]
+            entry["status"] = trade["status"]
+            break
+
+    with open(JSON_LOG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, default=str)
+
+
+def update_signal_json_status(entry_time, tp_status, sl_status, status, ambiguous=False):
+    """Update the signal entry with final TP/SL outcome."""
+    if not os.path.exists(JSON_LOG_PATH):
+        return
+    try:
+        with open(JSON_LOG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return
+
+    time_str = _ts_str(entry_time)
+    for entry in reversed(data):
+        if entry.get("time") == time_str:
+            entry["tp_status"] = tp_status
+            entry["sl_status"] = sl_status
+            entry["status"] = status
+            entry["ambiguous"] = ambiguous
+            break
+
+    with open(JSON_LOG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, default=str)
 
 
 def export_chart_png(symbol, pattern, history, ts):
@@ -411,9 +484,9 @@ def export_chart_png(symbol, pattern, history, ts):
     last_idx = len(candles) - 1
     last = candles[-1]
     if pattern == "bull":
-        arrow, y, va, color = "\U0001F53C", last["low"] - span * 0.08, "top", "#2ecc71"
+        arrow, y, va = "\U0001F53C", last["low"] - span * 0.08, "top"
     else:
-        arrow, y, va, color = "\U0001F53D", last["high"] + span * 0.08, "bottom", "#e74c3c"
+        arrow, y, va = "\U0001F53D", last["high"] + span * 0.08, "bottom"
 
     try:
         ax.annotate(arrow, xy=(last_idx, y), fontsize=28, ha="center", va=va,
@@ -470,6 +543,8 @@ def export_trade_result_chart(trade_result, history):
 
     win = trade_result["status"] == "TP_HIT"
     outcome_text = "TP HIT (WIN)" if win else "SL HIT (LOSS)"
+    if trade_result.get("ambiguous"):
+        outcome_text += " *ambiguous candle*"
     outcome_color = "#2ecc71" if win else "#e74c3c"
 
     ax.set_title(
@@ -570,9 +645,9 @@ def handle_candle_close(symbol, history, ts, last_result, active_trade, point_si
     curr = history[-1]
 
     if active_trade is not None:
-        outcome = check_trade(active_trade, curr)
+        outcome, ambiguous = check_trade(active_trade, curr)
         if outcome:
-            trade_result = report_trade_result(active_trade, outcome, curr)
+            trade_result = report_trade_result(active_trade, outcome, curr, ambiguous)
             png_path = export_trade_result_chart(trade_result, history)
             console.print(f"[dim]Saved trade chart -> {png_path}[/dim]")
             active_trade = None
@@ -582,6 +657,7 @@ def handle_candle_close(symbol, history, ts, last_result, active_trade, point_si
     if new_result is not None and active_trade is None:
         entry_price = curr["close"]
         active_trade = open_trade(symbol, new_result, entry_price, curr["time"], point_size)
+        update_signal_json_with_trade(ts, active_trade)
         direction_label = "BULLISH" if new_result == "bull" else "BEARISH"
         console.print(Panel(
             f"[bold]Following {symbol} {direction_label}[/bold]\n"
@@ -591,6 +667,8 @@ def handle_candle_close(symbol, history, ts, last_result, active_trade, point_si
             border_style="cyan",
             title="Trade opened - following until TP/SL",
         ))
+    elif new_result is not None and active_trade is not None:
+        console.print("[dim]Signal logged but not followed - a trade is already active.[/dim]")
 
     return new_result, active_trade
 
