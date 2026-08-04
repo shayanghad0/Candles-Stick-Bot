@@ -1,198 +1,860 @@
 """
-Engulfing Candle Watcher for MetaTrader 5 (with rich UI + simulator)
-----------------------------------------------------------------------
-Two modes:
-  1. Live  - logs into your MT5 account, waits for each new candle
-             close on the timeframe you choose, and reports bullish /
-             bearish engulfing patterns on the real market.
-  2. Simulate - no MT5 login needed. Generates synthetic OHLC candles
-             (with occasional guaranteed engulfing setups mixed with
-             random noise) so you can watch the detector work without
-             touching a live/demo account.
+Engulfing Candle Watcher for MetaTrader 5 (live chart + real trades)
+--------------------------------------------------------------------
+LIVE MODE:
+  - Connects to your MT5 account
+  - Polls real-time ticks every ~200ms (sub-second)
+  - Opens a matplotlib live candlestick chart window
+  - Detects bullish/bearish engulfing on candle close
+  - Opens and closes REAL MT5 orders automatically
+  - Console dashboard shows live bid/ask, open position, PnL
+  - TP/SL enforced by MT5 server (pending orders)
 
-Auto-terminal detection: in live mode the script searches common
-install locations for terminal64.exe and passes that path to MT5,
-instead of relying on whichever terminal happens to be open - this
-avoids the "stuck session" auth errors from a stale terminal.
-
-On every detected pattern the script:
-  1. Appends/updates a record in a JSON log file
-     (signals/engulfing_signals.json) - entry_price/tp_price/sl_price
-     get filled in once a trade is opened, and tp_status/sl_status/
-     status get filled in once TP or SL is hit.
-  2. Exports a PNG chart of the last 10 candles with a big up/down
-     arrow marking the pattern candle (signals/charts/...).
-
-Trade following is a SIMULATED/paper trade the script tracks in
-software only - it never sends a real order to your MT5 account.
-Only one trade is followed at a time: if a new signal fires while a
-trade is still open, it gets logged but not followed (status stays
-"open" with null tp/sl) until the active trade resolves.
-
-IMPORTANT LIMITATION - same-candle TP/SL ambiguity:
-OHLC data alone can't tell you which level was actually touched
-FIRST inside a single candle. If one bar's high/low range spans both
-your TP and SL, the script now conservatively assumes SL was hit
-first (the worse outcome) rather than always crediting TP - assuming
-TP first would silently inflate the win rate. This is flagged in the
-log as "ambiguous": true.
+SIMULATE MODE:
+  - No MT5 login. Synthetic candles for testing the pattern detector.
 
 Requirements:
     pip install rich MetaTrader5 pandas matplotlib
 
-This script is for educational / technical-analysis purposes only.
-It does not place trades and is not financial advice.
+WARNING: Live mode places REAL trades on your account.
+         Use a demo account first.
 """
 
 import glob
 import json
+import multiprocessing
 import os
 import random
+import sys
 import time
+from collections import deque
 from datetime import datetime
 
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.panel import Panel
 from rich.prompt import Prompt, IntPrompt
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
+from rich.rule import Rule
+from rich.text import Text
 
 console = Console()
 
 TIMEFRAMES = {
-    "M1": 60,
-    "M5": 300,
-    "M15": 900,
-    "M30": 1800,
-    "H1": 3600,
-    "H4": 14400,
-    "D1": 86400,
+    "M1": 60, "M5": 300, "M15": 900, "M30": 1800,
+    "H1": 3600, "H4": 14400, "D1": 86400,
 }
 
 SIGNALS_DIR = "signals"
 JSON_LOG_PATH = os.path.join(SIGNALS_DIR, "engulfing_signals.json")
 CHARTS_DIR = os.path.join(SIGNALS_DIR, "charts")
 
-# Follow-the-trade thresholds (in broker "points", i.e. the smallest
-# quoted price increment - NOT necessarily the same as a "pip").
-# Per spec: TP = 180 points (~8 pip), SL = 150 points (~15 pip),
-# same thresholds for both bullish and bearish signals.
 TP_POINTS = 180
 SL_POINTS = 150
+LOT_SIZE = 0.01
+
+CHART_CANDLES = 20
+CHART_HEIGHT = 14
+TICK_POLL_MS = 200  # sub-second tick polling
 
 
 # --------------------------------------------------------------------------
-# Terminal auto-detection (live mode)
+# Terminal auto-detection
 # --------------------------------------------------------------------------
 
 def find_terminal_path():
-    """Search common Windows install locations for terminal64.exe."""
     candidates = []
-
     program_dirs = [
         os.environ.get("PROGRAMFILES", r"C:\Program Files"),
         os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
     ]
     for pf in program_dirs:
         candidates += glob.glob(os.path.join(pf, "*", "terminal64.exe"))
-
     appdata = os.environ.get("APPDATA")
     if appdata:
         candidates += glob.glob(
             os.path.join(appdata, "MetaQuotes", "Terminal", "*", "terminal64.exe")
         )
-
     return candidates[0] if candidates else None
-
-
-def print_terminal_panel(path, attempt=None, retries=None, connected=False, login=None, server=None):
-    """Single, updating panel showing the auto-terminal-detection status."""
-    lines = []
-    if path:
-        lines.append("[green]Terminal:[/green] auto-detected")
-        lines.append(f"[bold]Path:[/bold] {path}")
-    else:
-        lines.append("[yellow]Terminal:[/yellow] not found automatically - using default launch")
-
-    if attempt is not None:
-        lines.append(f"[bold]Connection attempt:[/bold] {attempt}/{retries}")
-
-    if connected:
-        lines.append(f"[bold green]Status: CONNECTED[/bold green]  account {login} @ {server}")
-        style = "green"
-    else:
-        lines.append("[bold]Status:[/bold] connecting...")
-        style = "cyan"
-
-    console.print(Panel("\n".join(lines), title="MT5 Auto-Terminal", border_style=style))
 
 
 def connect_live(login, password, server, retries=3):
     import MetaTrader5 as mt5
 
-    with console.status("[cyan]Auto-detecting your MT5 terminal installation...", spinner="dots"):
+    with console.status(
+        "[cyan]Auto-detecting your MT5 terminal installation...", spinner="dots"
+    ):
         path = find_terminal_path()
 
+    path_line = (
+        f"[green]Found:[/green] {path}"
+        if path
+        else "[yellow]Not found - using default launch[/yellow]"
+    )
+
     last_error = None
-    for attempt in range(1, retries + 1):
-        print_terminal_panel(path, attempt=attempt, retries=retries)
+    with console.status("", spinner="dots") as status:
+        for attempt in range(1, retries + 1):
+            status.update(
+                f"[cyan]Connecting (attempt {attempt}/{retries})...[/cyan]  {path_line}"
+            )
+            mt5.shutdown()
+            time.sleep(1)
 
-        mt5.shutdown()
-        time.sleep(1)
+            ok_init = mt5.initialize(path=path) if path else mt5.initialize()
+            if not ok_init:
+                last_error = mt5.last_error()
+                continue
 
-        ok_init = mt5.initialize(path=path) if path else mt5.initialize()
-        if not ok_init:
+            if mt5.login(login, password=password, server=server):
+                console.print(
+                    Panel(
+                        f"{path_line}\n[bold green]Connected[/bold green] - account {login} @ {server}",
+                        title="MT5 Auto-Terminal",
+                        border_style="green",
+                    )
+                )
+                return mt5
+
             last_error = mt5.last_error()
-            console.print(f"[red]initialize() failed:[/red] {last_error}")
-            continue
-
-        if mt5.login(login, password=password, server=server):
-            print_terminal_panel(path, connected=True, login=login, server=server)
-            return mt5
-
-        last_error = mt5.last_error()
-        console.print(f"[red]login() failed:[/red] {last_error}")
 
     mt5.shutdown()
-    console.print(Panel(
-        f"[bold red]Could not connect after {retries} attempts.[/bold red]\n"
-        f"Last error: {last_error}\n\n"
-        "Checklist:\n"
-        "  1. Fully quit MT5 (check Task Manager for terminal64.exe) and retry.\n"
-        "  2. Log in manually in the MT5 desktop app with the same account/\n"
-        "     password/server to confirm the credentials work outside Python.\n"
-        "  3. Password must be the TRADE password, not the investor (read-only) one.\n"
-        "  4. Server name must match exactly what's listed in MT5's server list.",
-        border_style="red",
-        title="Connection failed",
-    ))
+    console.print(
+        Panel(
+            f"[bold red]Could not connect after {retries} attempts.[/bold red]\n"
+            f"Last error: {last_error}\n\n"
+            "Checklist:\n"
+            "  1. Fully quit MT5 (Task Manager) and retry.\n"
+            "  2. Log in manually with same credentials first.\n"
+            "  3. Use TRADE password, not investor password.\n"
+            "  4. Server name must match exactly.",
+            border_style="red",
+            title="Connection failed",
+        )
+    )
     raise SystemExit(1)
 
 
-def get_live_closed_candles(mt5, symbol, tf_key, n_closed=10):
-    """Returns the last n_closed CLOSED candles (oldest -> newest).
-    Fetches n_closed+1 bars and drops the still-forming last one."""
-    import pandas as pd
+# --------------------------------------------------------------------------
+# MT5 trade execution (real trades)
+# --------------------------------------------------------------------------
 
-    tf_const = getattr(mt5, f"TIMEFRAME_{tf_key}")
-    rates = mt5.copy_rates_from_pos(symbol, tf_const, 0, n_closed + 1)
-    if rates is None or len(rates) < 2:
+def mt5_open_order(mt5, symbol, direction, entry_price, tp_price, sl_price, lot):
+    import MetaTrader5 as mt5mod
+
+    order_type = mt5mod.ORDER_TYPE_BUY if direction == "bull" else mt5mod.ORDER_TYPE_SELL
+    price_info = mt5.symbol_info_tick(symbol)
+    if not price_info:
+        return None, "Cannot get tick"
+
+    if direction == "bull":
+        price = price_info.ask
+    else:
+        price = price_info.bid
+
+    request = {
+        "action": mt5mod.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": lot,
+        "type": order_type,
+        "price": price,
+        "tp": tp_price,
+        "sl": sl_price,
+        "deviation": 20,
+        "magic": 123456,
+        "comment": f"ENG_{direction}",
+        "type_time": mt5mod.ORDER_TIME_GTC,
+        "type_filling": mt5mod.ORDER_FILLING_IOC,
+    }
+
+    result = mt5.order_send(request)
+    if result is None:
+        return None, f"order_send returned None: {mt5.last_error()}"
+    if result.retcode != mt5mod.TRADE_RETCODE_DONE:
+        return None, f"Error {result.retcode}: {result.comment}"
+    return result, None
+
+
+def mt5_close_position(mt5, symbol, magic=123456):
+    import MetaTrader5 as mt5mod
+
+    positions = mt5.positions_get(symbol=symbol)
+    if not positions:
+        return None, "No position"
+
+    for pos in positions:
+        if pos.magic != magic:
+            continue
+        if pos.type == mt5mod.ORDER_TYPE_BUY:
+            close_type = mt5mod.ORDER_TYPE_SELL
+            price = mt5.symbol_info_tick(symbol).bid
+        else:
+            close_type = mt5mod.ORDER_TYPE_BUY
+            price = mt5.symbol_info_tick(symbol).ask
+
+        request = {
+            "action": mt5mod.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": pos.volume,
+            "type": close_type,
+            "position": pos.ticket,
+            "price": price,
+            "deviation": 20,
+            "magic": magic,
+            "comment": "ENG_close",
+            "type_time": mt5mod.ORDER_TIME_GTC,
+            "type_filling": mt5mod.ORDER_FILLING_IOC,
+        }
+
+        result = mt5.order_send(request)
+        if result is None:
+            return None, f"order_send returned None: {mt5.last_error()}"
+        if result.retcode != mt5mod.TRADE_RETCODE_DONE:
+            return None, f"Error {result.retcode}: {result.comment}"
+        return result, None
+
+    return None, "No matching position"
+
+
+def mt5_get_position(mt5, symbol, magic=123456):
+    import MetaTrader5 as mt5mod
+
+    positions = mt5.positions_get(symbol=symbol)
+    if not positions:
         return None
-    df = pd.DataFrame(rates)
-    df["time"] = pd.to_datetime(df["time"], unit="s")
-    records = df.to_dict("records")
-    return records[:-1]  # drop the forming bar
+    for pos in positions:
+        if pos.magic == magic:
+            return pos
+    return None
 
 
 # --------------------------------------------------------------------------
-# Candle simulator
+# Pattern detection
+# --------------------------------------------------------------------------
+
+def is_bullish_engulfing(prev, curr):
+    prev_bearish = prev["close"] < prev["open"]
+    curr_bullish = curr["close"] > curr["open"]
+    engulfs = curr["open"] <= prev["close"] and curr["close"] >= prev["open"]
+    return prev_bearish and curr_bullish and engulfs
+
+
+def is_bearish_engulfing(prev, curr):
+    prev_bullish = prev["close"] > prev["open"]
+    curr_bearish = curr["close"] < curr["open"]
+    engulfs = curr["open"] >= prev["close"] and curr["close"] <= prev["open"]
+    return prev_bullish and curr_bearish and engulfs
+
+
+def _ts_str(ts):
+    return ts.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts, "strftime") else str(ts)
+
+
+# --------------------------------------------------------------------------
+# JSON logging
+# --------------------------------------------------------------------------
+
+def save_signal_json(symbol, pattern, prev, curr, ts, entry_price, tp_price, sl_price):
+    os.makedirs(SIGNALS_DIR, exist_ok=True)
+    entry = {
+        "symbol": symbol,
+        "pattern": "bullish_engulfing" if pattern == "bull" else "bearish_engulfing",
+        "time": _ts_str(ts),
+        "prev_open": prev["open"], "prev_close": prev["close"],
+        "curr_open": curr["open"], "curr_close": curr["close"],
+        "entry_price": entry_price, "tp_price": tp_price, "sl_price": sl_price,
+        "status": "open",
+    }
+    data = []
+    if os.path.exists(JSON_LOG_PATH):
+        try:
+            with open(JSON_LOG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            data = []
+    data.append(entry)
+    with open(JSON_LOG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, default=str)
+
+
+def update_signal_json_status(entry_time, status):
+    if not os.path.exists(JSON_LOG_PATH):
+        return
+    try:
+        with open(JSON_LOG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return
+    time_str = _ts_str(entry_time)
+    for entry in reversed(data):
+        if entry.get("time") == time_str:
+            entry["status"] = status
+            break
+    with open(JSON_LOG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, default=str)
+
+
+# --------------------------------------------------------------------------
+# Live chart (matplotlib, separate process so TkAgg works)
+# --------------------------------------------------------------------------
+
+def _chart_process(queue, stop_event):
+    """Runs in a child process with its own main thread."""
+    import matplotlib
+    matplotlib.use("TkAgg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    plt.ion()
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.suptitle("Live Engulfing Chart", fontsize=14, fontweight="bold")
+
+    candles = []
+    bid = ask = entry = tp = sl = 0.0
+
+    while not stop_event.is_set():
+        # drain all pending messages, keep only latest
+        while not queue.empty():
+            msg = queue.get_nowait()
+            if msg[0] == "candles":
+                candles = msg[1]
+            elif msg[0] == "price":
+                bid, ask = msg[1], msg[2]
+            elif msg[0] == "levels":
+                entry, tp, sl = msg[1], msg[2], msg[3]
+
+        try:
+            ax.clear()
+            if not candles:
+                ax.set_title("Waiting for data...")
+                fig.canvas.draw_idle()
+                fig.canvas.flush_events()
+                plt.pause(0.3)
+                continue
+
+            for i, c in enumerate(candles):
+                color = "#2ecc71" if c["close"] >= c["open"] else "#e74c3c"
+                body_low = min(c["open"], c["close"])
+                body_high = max(c["open"], c["close"])
+                body_h = max(body_high - body_low, 0.001)
+                ax.add_patch(Rectangle(
+                    (i - 0.35, body_low), 0.7, body_h,
+                    color=color, zorder=3, alpha=0.9,
+                ))
+                ax.plot([i, i], [c["low"], c["high"]],
+                        color=color, linewidth=1.2, zorder=2)
+
+            if entry:
+                ax.axhline(entry, color="dodgerblue", linestyle="--",
+                           linewidth=1, label="Entry", alpha=0.7)
+            if tp:
+                ax.axhline(tp, color="#2ecc71", linestyle="-",
+                           linewidth=1, label="TP", alpha=0.7)
+            if sl:
+                ax.axhline(sl, color="#e74c3c", linestyle="-",
+                           linewidth=1, label="SL", alpha=0.7)
+            if bid:
+                ax.axhline(bid, color="cyan", linestyle=":",
+                           linewidth=0.8, alpha=0.6)
+            if ask:
+                ax.axhline(ask, color="magenta", linestyle=":",
+                           linewidth=0.8, alpha=0.6)
+
+            labels = []
+            for c in candles:
+                t = c.get("time", "")
+                labels.append(t.strftime("%H:%M") if hasattr(t, "strftime") else str(t)[-8:])
+            ax.set_xticks(range(len(candles)))
+            ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+            ax.set_ylabel("Price", fontsize=10)
+            title = ""
+            if bid:
+                title += f"Bid: {bid:.5f}   "
+            if ask:
+                title += f"Ask: {ask:.5f}"
+            ax.set_title(title, fontsize=11)
+            if entry or tp or sl:
+                ax.legend(loc="upper left", fontsize=8)
+            ax.margins(x=0.05)
+            fig.tight_layout()
+            fig.canvas.draw_idle()
+            fig.canvas.flush_events()
+            plt.pause(0.2)
+
+        except Exception:
+            plt.pause(0.5)
+
+    plt.ioff()
+    plt.close(fig)
+
+
+class LiveChart:
+    def __init__(self):
+        self._queue = None
+        self._process = None
+        self._stop = None
+
+    def start(self):
+        self._queue = multiprocessing.Queue()
+        self._stop = multiprocessing.Event()
+        self._process = multiprocessing.Process(
+            target=_chart_process, args=(self._queue, self._stop), daemon=True,
+        )
+        self._process.start()
+
+    def stop(self):
+        if self._stop:
+            self._stop.set()
+        if self._process:
+            self._process.join(timeout=3)
+            if self._process.is_alive():
+                self._process.terminate()
+
+    def update_candles(self, candles):
+        if self._queue:
+            try:
+                safe = []
+                for c in candles:
+                    sc = dict(c)
+                    if "time" in sc and hasattr(sc["time"], "strftime"):
+                        sc["time"] = sc["time"].strftime("%H:%M:%S")
+                    safe.append(sc)
+                self._queue.put_nowait(("candles", safe))
+            except Exception:
+                pass
+
+    def update_price(self, bid, ask):
+        if self._queue:
+            try:
+                self._queue.put_nowait(("price", bid, ask))
+            except Exception:
+                pass
+
+    def set_levels(self, entry=None, tp=None, sl=None):
+        if self._queue:
+            try:
+                self._queue.put_nowait(("levels", entry or 0, tp or 0, sl or 0))
+            except Exception:
+                pass
+
+
+# --------------------------------------------------------------------------
+# Console dashboard
+# --------------------------------------------------------------------------
+
+def render_ascii_chart(candles, height=CHART_HEIGHT):
+    if not candles:
+        return Text("(no candle data yet)", style="dim")
+
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
+    top, bottom = max(highs), min(lows)
+    price_range = (top - bottom) or 1.0
+
+    def row_for(price):
+        ratio = (price - bottom) / price_range
+        row = int(round((1 - ratio) * (height - 1)))
+        return max(0, min(height - 1, row))
+
+    grid = [[(" ", None) for _ in candles] for _ in range(height)]
+    for i, c in enumerate(candles):
+        color = "green" if c["close"] >= c["open"] else "red"
+        top_row, bot_row = row_for(c["high"]), row_for(c["low"])
+        body_top, body_bot = row_for(max(c["open"], c["close"])), row_for(min(c["open"], c["close"]))
+        for r in range(top_row, bot_row + 1):
+            grid[r][i] = ("\u2502", color)
+        for r in range(body_top, body_bot + 1):
+            grid[r][i] = ("\u2588", color)
+
+    lines = []
+    for r in range(height):
+        row_text = Text()
+        for ch, color in grid[r]:
+            if color:
+                row_text.append(ch + " ", style=color)
+            else:
+                row_text.append("  ")
+        lines.append(row_text)
+
+    axis = Text(
+        f"  high {top:.5f}" + " " * max(0, len(candles) * 2 - 24) + f"low {bottom:.5f}",
+        style="dim",
+    )
+    return Group(*lines, axis)
+
+
+class Dashboard:
+    def __init__(self, symbol, tf_key, point_size):
+        self.symbol = symbol
+        self.tf_key = tf_key
+        self.point_size = point_size
+        self.status_line = "Starting..."
+        self.chart_candles = []
+        self.ohlc = None
+        self.candle_ts = "-"
+        self.bid = 0.0
+        self.ask = 0.0
+        self.spread = 0.0
+        self.position = None  # MT5 position object
+        self.trades = []
+        self.events = []
+        self.trade_count = 0
+        self.win_count = 0
+        self.loss_count = 0
+
+    def add_event(self, text):
+        ts = datetime.now().strftime("%H:%M:%S")
+        self.events.append(f"[{ts}] {text}")
+        self.events = self.events[-8:]
+
+    def render(self):
+        # Live price section
+        bid_color = "green" if self.bid else "dim"
+        ask_color = "red" if self.ask else "dim"
+        spread_pts = (self.spread / self.point_size) if self.point_size and self.spread else 0
+
+        price_line = Text()
+        price_line.append(f"{self.symbol}  ", style="bold cyan")
+        price_line.append(f"{self.tf_key}  ", style="bold")
+        price_line.append(f"point={self.point_size}  TP={TP_POINTS}pts SL={SL_POINTS}pts lot={LOT_SIZE}\n")
+        price_line.append("BID ", style="bold")
+        price_line.append(f"{self.bid:.5f}   ", style=f"bold {bid_color}")
+        price_line.append("ASK ", style="bold")
+        price_line.append(f"{self.ask:.5f}   ", style=f"bold {ask_color}")
+        price_line.append("Spread ")
+        price_line.append(f"{spread_pts:.1f}pts", style="yellow")
+
+        # Status
+        status = Text.from_markup(self.status_line)
+
+        # OHLC
+        if self.ohlc:
+            o, h, l, c = self.ohlc["open"], self.ohlc["high"], self.ohlc["low"], self.ohlc["close"]
+            dc = "green" if c >= o else "red"
+            ohlc_text = Text()
+            ohlc_text.append("O "); ohlc_text.append(f"{o:.5f}  ", style="bold")
+            ohlc_text.append("H "); ohlc_text.append(f"{h:.5f}  ", style="bold")
+            ohlc_text.append("L "); ohlc_text.append(f"{l:.5f}  ", style="bold")
+            ohlc_text.append("C "); ohlc_text.append(f"{c:.5f}  ", style=f"bold {dc}")
+            ohlc_text.append(f"@ {self.candle_ts}")
+        else:
+            ohlc_text = Text("(waiting for first candle close)", style="dim")
+
+        chart = render_ascii_chart(self.chart_candles)
+
+        # Position table
+        pos_table = Table(box=None, pad_edge=False, header_style="bold cyan")
+        pos_table.add_column("Side")
+        pos_table.add_column("Entry", justify="right")
+        pos_table.add_column("Current", justify="right")
+        pos_table.add_column("TP", justify="right")
+        pos_table.add_column("SL", justify="right")
+        pos_table.add_column("PnL pts", justify="right")
+        pos_table.add_column("Status")
+
+        if self.position:
+            p = self.position
+            side = "LONG" if p.type == 0 else "SHORT"
+            sc = "green" if p.type == 0 else "red"
+            pnl_pts = p.profit / max(p.volume, 0.01) * (1.0 / max(self.point_size, 0.0001))
+            pnl_color = "green" if p.profit >= 0 else "red"
+            pos_table.add_row(
+                f"[{sc}]{side}[/{sc}]",
+                f"{p.price_open:.5f}",
+                f"{self.bid:.5f}" if p.type == 0 else f"{self.ask:.5f}",
+                f"[green]{p.tp:.5f}[/green]" if p.tp else "-",
+                f"[red]{p.sl:.5f}[/red]" if p.sl else "-",
+                f"[{pnl_color}]{pnl_pts:+.1f}[/{pnl_color}]",
+                f"[green]OPEN[/green]",
+            )
+        else:
+            pos_table.add_row("-", "-", "-", "-", "-", "-", "[dim]no position[/dim]")
+
+        # Stats
+        total = self.win_count + self.loss_count
+        wr = (self.win_count / total * 100) if total else 0
+        stats = Text.from_markup(
+            f"Trades: [bold]{self.trade_count}[/bold]  "
+            f"Wins: [green]{self.win_count}[/green]  "
+            f"Losses: [red]{self.loss_count}[/red]  "
+            f"WR: [bold]{wr:.0f}%[/bold]"
+        )
+
+        events_text = "\n".join(self.events) if self.events else "[dim](none yet)[/dim]"
+
+        body = Group(
+            price_line,
+            Rule(style="dim"),
+            status,
+            Rule(style="dim"),
+            Text.from_markup("[bold]OHLC[/bold]"),
+            ohlc_text,
+            Rule(style="dim"),
+            Text.from_markup(f"[bold]Chart[/bold] (last {len(self.chart_candles)} candles)"),
+            chart,
+            Rule(style="dim"),
+            Text.from_markup("[bold]Position[/bold]"),
+            pos_table,
+            stats,
+            Rule(style="dim"),
+            Text.from_markup("[bold]Recent[/bold]\n" + events_text),
+        )
+        return Panel(body, title="Engulfing Watcher - LIVE", border_style="cyan")
+
+
+# --------------------------------------------------------------------------
+# Tick-to-candle builder (sub-second)
+# --------------------------------------------------------------------------
+
+class TickCandleBuilder:
+    def __init__(self, tf_seconds):
+        self.tf_seconds = tf_seconds
+        self.candles = []
+        self.current = None
+
+    def add_tick(self, bid, ask, ts):
+        mid = (bid + ask) / 2.0
+        epoch = int(ts.timestamp())
+        boundary = (epoch // self.tf_seconds) * self.tf_seconds
+
+        if self.current is None or self.current["time_epoch"] != boundary:
+            # new candle
+            if self.current is not None:
+                self.candles.append(self.current)
+            self.current = {
+                "time": ts,
+                "time_epoch": boundary,
+                "open": mid,
+                "high": mid,
+                "low": mid,
+                "close": mid,
+            }
+        else:
+            self.current["high"] = max(self.current["high"], mid)
+            self.current["low"] = min(self.current["low"], mid)
+            self.current["close"] = mid
+            self.current["time"] = ts
+
+    def get_closed(self):
+        """Return list of closed candles (excluding the forming one)."""
+        if len(self.candles) < 1:
+            return []
+        return self.candles[:-1] if self.current else self.candles
+
+    def get_all(self):
+        """Return closed + forming candle."""
+        result = list(self.candles)
+        if self.current:
+            result.append(self.current)
+        return result
+
+    def get_last_closed(self):
+        if len(self.candles) >= 2:
+            return self.candles[-2]
+        return None
+
+    def on_new_boundary(self):
+        """Check if a new candle boundary was just crossed."""
+        if len(self.candles) < 2:
+            return False
+        return True
+
+
+# --------------------------------------------------------------------------
+# Live mode
+# --------------------------------------------------------------------------
+
+def run_live():
+    import MetaTrader5 as mt5
+
+    login = IntPrompt.ask("Account ID (login)")
+    password = Prompt.ask("Password", password=False)
+    server = Prompt.ask("Server")
+    symbol = Prompt.ask("Symbol", default="EURUSD").strip().upper()
+    tf_key = Prompt.ask("Timeframe", choices=list(TIMEFRAMES.keys()), default="M1")
+    tf_seconds = TIMEFRAMES[tf_key]
+    lot = float(Prompt.ask("Lot size", default=str(LOT_SIZE)))
+
+    mt5_conn = connect_live(login, password, server)
+
+    if not mt5_conn.symbol_select(symbol, True):
+        mt5_conn.shutdown()
+        console.print(f"[bold red]Symbol '{symbol}' not found in Market Watch.[/bold red]")
+        raise SystemExit(1)
+
+    info = mt5_conn.symbol_info(symbol)
+    point_size = info.point if info and info.point else 0.01
+
+    dash = Dashboard(symbol, tf_key, point_size)
+    builder = TickCandleBuilder(tf_seconds)
+    chart = LiveChart()
+
+    # state
+    last_candle_count = 0
+    active_position = None
+    last_tick_time = time.time()
+    check_interval = TICK_POLL_MS / 1000.0
+
+    # start live chart
+    chart.start()
+
+    try:
+        with Live(dash.render(), console=console, refresh_per_second=10, screen=False) as live:
+            while True:
+                # poll tick from MT5 (sub-second)
+                tick = mt5_conn.symbol_info_tick(symbol)
+                if tick is None:
+                    time.sleep(0.1)
+                    continue
+
+                now = datetime.fromtimestamp(tick.time)
+                bid = tick.bid
+                ask = tick.ask
+
+                # update dashboard price
+                dash.bid = bid
+                dash.ask = ask
+                dash.spread = ask - bid
+
+                # feed tick into candle builder
+                builder.add_tick(bid, ask, now)
+                all_candles = builder.get_all()
+
+                # update chart
+                chart.update_candles(all_candles)
+                chart.update_price(bid, ask)
+
+                # update position info
+                pos = mt5_get_position(mt5_conn, symbol)
+                dash.position = pos
+                if pos:
+                    chart.set_levels(pos.price_open, pos.tp, pos.sl)
+                else:
+                    chart.set_levels()
+
+                # check for new candle close (under 1 second)
+                closed = builder.get_closed()
+                if len(closed) >= 2 and len(closed) > last_candle_count:
+                    # a new candle just closed
+                    last_candle_count = len(closed)
+                    prev = closed[-2]
+                    curr = closed[-1]
+
+                    dash.ohlc = curr
+                    dash.candle_ts = curr["time"].strftime("%H:%M:%S")
+                    dash.chart_candles = closed[-CHART_CANDLES:]
+
+                    # check TP/SL hit on the closed candle
+                    if active_position:
+                        if active_position.type == 0:  # BUY
+                            if curr["high"] >= active_position.tp and active_position.tp > 0:
+                                # TP hit - close via MT5
+                                res, err = mt5_close_position(mt5_conn, symbol)
+                                if not err:
+                                    dash.add_event("[bold green]TP HIT[/bold green] - closed via MT5")
+                                    dash.win_count += 1
+                                    dash.trade_count += 1
+                                    update_signal_json_status(active_position.time, "TP_HIT")
+                                    active_position = None
+                                else:
+                                    dash.add_event(f"[red]TP close error: {err}[/red]")
+                            elif curr["low"] <= active_position.sl and active_position.sl > 0:
+                                res, err = mt5_close_position(mt5_conn, symbol)
+                                if not err:
+                                    dash.add_event("[bold red]SL HIT[/bold red] - closed via MT5")
+                                    dash.loss_count += 1
+                                    dash.trade_count += 1
+                                    update_signal_json_status(active_position.time, "SL_HIT")
+                                    active_position = None
+                                else:
+                                    dash.add_event(f"[red]SL close error: {err}[/red]")
+                        else:  # SELL
+                            if curr["low"] <= active_position.tp and active_position.tp > 0:
+                                res, err = mt5_close_position(mt5_conn, symbol)
+                                if not err:
+                                    dash.add_event("[bold green]TP HIT[/bold green] - closed via MT5")
+                                    dash.win_count += 1
+                                    dash.trade_count += 1
+                                    update_signal_json_status(active_position.time, "TP_HIT")
+                                    active_position = None
+                                else:
+                                    dash.add_event(f"[red]TP close error: {err}[/red]")
+                            elif curr["high"] >= active_position.sl and active_position.sl > 0:
+                                res, err = mt5_close_position(mt5_conn, symbol)
+                                if not err:
+                                    dash.add_event("[bold red]SL HIT[/bold red] - closed via MT5")
+                                    dash.loss_count += 1
+                                    dash.trade_count += 1
+                                    update_signal_json_status(active_position.time, "SL_HIT")
+                                    active_position = None
+                                else:
+                                    dash.add_event(f"[red]SL close error: {err}[/red]")
+
+                    # pattern detection
+                    if is_bullish_engulfing(prev, curr):
+                        result = "bull"
+                    elif is_bearish_engulfing(prev, curr):
+                        result = "bear"
+                    else:
+                        result = None
+
+                    if result is not None:
+                        if active_position is None:
+                            entry_price = curr["close"]
+                            if result == "bull":
+                                tp_price = entry_price + TP_POINTS * point_size
+                                sl_price = entry_price - SL_POINTS * point_size
+                            else:
+                                tp_price = entry_price - TP_POINTS * point_size
+                                sl_price = entry_price + SL_POINTS * point_size
+
+                            # open real MT5 order
+                            res, err = mt5_open_order(
+                                mt5_conn, symbol, result,
+                                entry_price, tp_price, sl_price, lot
+                            )
+                            if err:
+                                dash.add_event(f"[red]Order error: {err}[/red]")
+                            else:
+                                active_position = mt5_get_position(mt5_conn, symbol)
+                                save_signal_json(symbol, result, prev, curr, now,
+                                                 entry_price, tp_price, sl_price)
+                                label = "LONG" if result == "bull" else "SHORT"
+                                dash.add_event(
+                                    f"New [bold]{label}[/bold] trade: entry {entry_price:.5f} "
+                                    f"TP {tp_price:.5f} SL {sl_price:.5f}"
+                                )
+                        else:
+                            dash.add_event(
+                                f"{'Bullish' if result == 'bull' else 'Bearish'} pattern - "
+                                f"skipped (position active)"
+                            )
+
+                    live.update(dash.render())
+
+                # update status line
+                remaining_tf = tf_seconds - (int(now.timestamp()) % tf_seconds)
+                dash.status_line = (
+                    f"[yellow]Next candle in {remaining_tf}s[/yellow]  "
+                    f"  Tick poll: {TICK_POLL_MS}ms"
+                )
+                live.update(dash.render())
+
+                # sub-second sleep
+                time.sleep(check_interval)
+
+    except KeyboardInterrupt:
+        console.print("\n[bold]Stopped by user.[/bold]")
+    finally:
+        chart.stop()
+        mt5_conn.shutdown()
+
+
+# --------------------------------------------------------------------------
+# Simulate mode
 # --------------------------------------------------------------------------
 
 class CandleSimulator:
-    """Generates synthetic OHLC candles - mostly random noise, with
-    occasional deliberately-engineered bullish/bearish engulfing
-    setups so the detector has something to catch."""
-
     def __init__(self, symbol, start_price=2000.0):
         self.symbol = symbol
         self.last_close = start_price
@@ -236,546 +898,69 @@ class CandleSimulator:
                 self.pending = random.choice(["bull_setup", "bear_setup"])
 
         candle = {
-            "time": datetime.now(),
-            "open": open_p,
-            "high": high_p,
-            "low": low_p,
-            "close": close_p,
+            "time": datetime.now(), "open": open_p,
+            "high": high_p, "low": low_p, "close": close_p,
         }
         self.candles.append(candle)
         self.last_close = close_p
         return candle
 
-    def last_n(self, n=3):
+    def last_n(self, n=CHART_CANDLES):
         return self.candles[-n:] if len(self.candles) >= 2 else None
-
-
-# --------------------------------------------------------------------------
-# Pattern detection
-# --------------------------------------------------------------------------
-
-def is_bullish_engulfing(prev, curr):
-    prev_bearish = prev["close"] < prev["open"]
-    curr_bullish = curr["close"] > curr["open"]
-    engulfs = curr["open"] <= prev["close"] and curr["close"] >= prev["open"]
-    return prev_bearish and curr_bullish and engulfs
-
-
-def is_bearish_engulfing(prev, curr):
-    prev_bullish = prev["close"] > prev["open"]
-    curr_bearish = curr["close"] < curr["open"]
-    engulfs = curr["open"] >= prev["close"] and curr["close"] <= prev["open"]
-    return prev_bullish and curr_bearish and engulfs
-
-
-def classify_direction(row):
-    if row["close"] > row["open"]:
-        return "Bullish", "green"
-    if row["close"] < row["open"]:
-        return "Bearish", "red"
-    return "Doji", "yellow"
-
-
-def _ts_str(ts):
-    return ts.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts, "strftime") else str(ts)
-
-
-# --------------------------------------------------------------------------
-# Trade following (TP/SL tracking after a signal fires)
-# --------------------------------------------------------------------------
-
-def open_trade(symbol, direction, entry_price, entry_time, point_size,
-                tp_points=TP_POINTS, sl_points=SL_POINTS):
-    if direction == "bull":
-        tp_price = entry_price + tp_points * point_size
-        sl_price = entry_price - sl_points * point_size
-    else:
-        tp_price = entry_price - tp_points * point_size
-        sl_price = entry_price + sl_points * point_size
-
-    return {
-        "symbol": symbol,
-        "direction": direction,
-        "entry_price": entry_price,
-        "entry_time": _ts_str(entry_time),
-        "tp_price": tp_price,
-        "sl_price": sl_price,
-        "tp_points": tp_points,
-        "sl_points": sl_points,
-        "point_size": point_size,
-        "status": "open",
-        "tp_status": None,
-        "sl_status": None,
-    }
-
-
-def check_trade(trade, candle):
-    """Check if this candle's high/low touched TP or SL.
-    Returns (outcome, ambiguous) where outcome is 'tp', 'sl', or None.
-
-    BUGFIX: OHLC alone can't tell you which level was touched FIRST
-    inside one candle. If BOTH are within this candle's range, we now
-    conservatively count it as SL (the worse outcome) instead of
-    always assuming TP - always assuming TP silently inflates the
-    win rate whenever a bar is wide enough to span both levels.
-    """
-    if trade["direction"] == "bull":
-        hit_tp = candle["high"] >= trade["tp_price"]
-        hit_sl = candle["low"] <= trade["sl_price"]
-    else:
-        hit_tp = candle["low"] <= trade["tp_price"]
-        hit_sl = candle["high"] >= trade["sl_price"]
-
-    if hit_tp and hit_sl:
-        return "sl", True   # ambiguous - assume the worse outcome
-    if hit_tp:
-        return "tp", False
-    if hit_sl:
-        return "sl", False
-    return None, False
-
-
-def report_trade_result(trade, outcome, hit_candle, ambiguous):
-    exit_price = trade["tp_price"] if outcome == "tp" else trade["sl_price"]
-    status = "TP_HIT" if outcome == "tp" else "SL_HIT"
-
-    if outcome == "tp":
-        tp_status, sl_status = "hit", "Canceled by TP"
-    else:
-        tp_status, sl_status = "Canceled by SL", "hit"
-
-    trade_result = dict(trade)
-    trade_result["status"] = status
-    trade_result["exit_price"] = exit_price
-    trade_result["exit_time"] = _ts_str(hit_candle["time"])
-    trade_result["tp_status"] = tp_status
-    trade_result["sl_status"] = sl_status
-    trade_result["ambiguous"] = ambiguous
-
-    update_signal_json_status(trade["entry_time"], tp_status, sl_status, status, ambiguous)
-
-    color = "green" if outcome == "tp" else "red"
-    label = "TAKE PROFIT HIT" if outcome == "tp" else "STOP LOSS HIT"
-    amb_note = "\n[yellow]Note: this candle touched BOTH TP and SL - counted as SL (conservative).[/yellow]" if ambiguous else ""
-    console.print(Panel(
-        f"[bold]{trade['symbol']} {trade['direction'].upper()} trade -> {label}[/bold]\n"
-        f"Entry: {trade['entry_price']:.3f}   Exit: {exit_price:.3f}\n"
-        f"TP Status: {tp_status}   SL Status: {sl_status}"
-        f"{amb_note}\n"
-        f"[dim]Updated -> {JSON_LOG_PATH}[/dim]",
-        border_style=color,
-        title="Trade closed",
-    ))
-
-    return trade_result
-
-
-# --------------------------------------------------------------------------
-# JSON logging + PNG chart export (on every detected pattern)
-# --------------------------------------------------------------------------
-
-def save_signal_json(symbol, pattern, prev, curr, ts):
-    os.makedirs(SIGNALS_DIR, exist_ok=True)
-
-    entry = {
-        "symbol": symbol,
-        "pattern": "bullish_engulfing" if pattern == "bull" else "bearish_engulfing",
-        "time": _ts_str(ts),
-        "prev_open": prev["open"],
-        "prev_close": prev["close"],
-        "curr_open": curr["open"],
-        "curr_close": curr["close"],
-        "entry_price": curr["close"],
-        "tp_price": None,
-        "sl_price": None,
-        "status": "open",
-        "tp_status": None,
-        "sl_status": None,
-        "ambiguous": None,
-    }
-
-    data = []
-    if os.path.exists(JSON_LOG_PATH):
-        try:
-            with open(JSON_LOG_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            data = []
-
-    data.append(entry)
-    with open(JSON_LOG_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, default=str)
-
-    return JSON_LOG_PATH
-
-
-def update_signal_json_with_trade(ts, trade):
-    """Update the signal entry with trade setup info (TP/SL prices, status)."""
-    if not os.path.exists(JSON_LOG_PATH):
-        return
-    try:
-        with open(JSON_LOG_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return
-
-    time_str = _ts_str(ts)
-    for entry in reversed(data):
-        if entry.get("time") == time_str:
-            entry["entry_price"] = trade["entry_price"]
-            entry["tp_price"] = trade["tp_price"]
-            entry["sl_price"] = trade["sl_price"]
-            entry["status"] = trade["status"]
-            break
-
-    with open(JSON_LOG_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, default=str)
-
-
-def update_signal_json_status(entry_time, tp_status, sl_status, status, ambiguous=False):
-    """Update the signal entry with final TP/SL outcome."""
-    if not os.path.exists(JSON_LOG_PATH):
-        return
-    try:
-        with open(JSON_LOG_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return
-
-    time_str = _ts_str(entry_time)
-    for entry in reversed(data):
-        if entry.get("time") == time_str:
-            entry["tp_status"] = tp_status
-            entry["sl_status"] = sl_status
-            entry["status"] = status
-            entry["ambiguous"] = ambiguous
-            break
-
-    with open(JSON_LOG_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, default=str)
-
-
-def export_chart_png(symbol, pattern, history, ts):
-    """Draw the last up-to-10 candles and mark the pattern candle with
-    a big up/down arrow. Returns the saved file path."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    os.makedirs(CHARTS_DIR, exist_ok=True)
-
-    candles = history[-10:]
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    highs = [c["high"] for c in candles]
-    lows = [c["low"] for c in candles]
-    span = max(highs) - min(lows) or 1.0
-
-    for i, c in enumerate(candles):
-        color = "#2ecc71" if c["close"] >= c["open"] else "#e74c3c"
-        body_low = min(c["open"], c["close"])
-        body_high = max(c["open"], c["close"])
-        ax.add_patch(plt.Rectangle(
-            (i - 0.3, body_low), 0.6, (body_high - body_low) or span * 0.01,
-            color=color, zorder=3,
-        ))
-        ax.plot([i, i], [c["low"], c["high"]], color=color, linewidth=1, zorder=2)
-
-    last_idx = len(candles) - 1
-    last = candles[-1]
-    if pattern == "bull":
-        arrow, y, va = "\U0001F53C", last["low"] - span * 0.08, "top"
-    else:
-        arrow, y, va = "\U0001F53D", last["high"] + span * 0.08, "bottom"
-
-    try:
-        ax.annotate(arrow, xy=(last_idx, y), fontsize=28, ha="center", va=va,
-                    fontname="Segoe UI Emoji")
-    except Exception:
-        ax.annotate(arrow, xy=(last_idx, y), fontsize=28, ha="center", va=va)
-
-    labels = [
-        c["time"].strftime("%H:%M") if hasattr(c["time"], "strftime") else str(c["time"])
-        for c in candles
-    ]
-    ax.set_xticks(range(len(candles)))
-    ax.set_xticklabels(labels, rotation=45, ha="right")
-
-    title_word = "BULLISH ENGULFING" if pattern == "bull" else "BEARISH ENGULFING"
-    ax.set_title(f"{symbol} - {title_word} @ {_ts_str(ts)}")
-    ax.set_ylabel("Price")
-    ax.margins(x=0.05)
-    fig.tight_layout()
-
-    fname = f"{symbol}_{pattern}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-    fpath = os.path.join(CHARTS_DIR, fname)
-    fig.savefig(fpath, dpi=150)
-    plt.close(fig)
-
-    return fpath
-
-
-def export_trade_result_chart(trade_result, history):
-    """Chart the last up-to-10 candles plus entry/TP/SL lines and the
-    final WIN/LOSS outcome for a closed trade."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    os.makedirs(CHARTS_DIR, exist_ok=True)
-
-    candles = history[-10:]
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    for i, c in enumerate(candles):
-        color = "#2ecc71" if c["close"] >= c["open"] else "#e74c3c"
-        body_low = min(c["open"], c["close"])
-        body_high = max(c["open"], c["close"])
-        ax.add_patch(plt.Rectangle(
-            (i - 0.3, body_low), 0.6, (body_high - body_low) or 0.01,
-            color=color, zorder=3,
-        ))
-        ax.plot([i, i], [c["low"], c["high"]], color=color, linewidth=1, zorder=2)
-
-    ax.axhline(trade_result["entry_price"], color="dodgerblue", linestyle="--", linewidth=1.2, label="Entry")
-    ax.axhline(trade_result["tp_price"], color="orange", linestyle="-", linewidth=1.2, label="TP")
-    ax.axhline(trade_result["sl_price"], color="red", linestyle="-", linewidth=1.2, label="SL")
-
-    win = trade_result["status"] == "TP_HIT"
-    outcome_text = "TP HIT (WIN)" if win else "SL HIT (LOSS)"
-    if trade_result.get("ambiguous"):
-        outcome_text += " *ambiguous candle*"
-    outcome_color = "#2ecc71" if win else "#e74c3c"
-
-    ax.set_title(
-        f"{trade_result['symbol']} {trade_result['direction'].upper()} - {outcome_text}",
-        color=outcome_color, fontweight="bold",
-    )
-    ax.legend(loc="upper left", fontsize=8)
-
-    labels = [
-        c["time"].strftime("%H:%M") if hasattr(c["time"], "strftime") else str(c["time"])
-        for c in candles
-    ]
-    ax.set_xticks(range(len(candles)))
-    ax.set_xticklabels(labels, rotation=45, ha="right")
-    ax.set_ylabel("Price")
-    ax.margins(x=0.05)
-    fig.tight_layout()
-
-    fname = (
-        f"{trade_result['symbol']}_{trade_result['direction']}_{trade_result['status']}_"
-        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-    )
-    fpath = os.path.join(CHARTS_DIR, fname)
-    fig.savefig(fpath, dpi=150)
-    plt.close(fig)
-
-    return fpath
-
-
-# --------------------------------------------------------------------------
-# Rich display helpers
-# --------------------------------------------------------------------------
-
-def print_candle_table(symbol, prev, curr, ts):
-    table = Table(title=f"{symbol} - last two candles @ {ts}", header_style="bold cyan")
-    table.add_column("Candle")
-    table.add_column("Open", justify="right")
-    table.add_column("Close", justify="right")
-    table.add_column("Direction")
-
-    for label, row in [("Previous", prev), ("Current", curr)]:
-        direction, color = classify_direction(row)
-        table.add_row(label, f"{row['open']:.3f}", f"{row['close']:.3f}", f"[{color}]{direction}[/{color}]")
-
-    console.print(table)
-
-
-def announce_pattern(kind, symbol, ts, repeated=False):
-    if kind == "bull":
-        label = "BULLISH ENGULFING (still active)" if repeated else "BULLISH ENGULFING"
-        console.print(Panel(
-            f"[bold white on green] {label} [/bold white on green]  {symbol} @ {ts}",
-            border_style="green",
-        ))
-    elif kind == "bear":
-        label = "BEARISH ENGULFING (still active)" if repeated else "BEARISH ENGULFING"
-        console.print(Panel(
-            f"[bold white on red] {label} [/bold white on red]  {symbol} @ {ts}",
-            border_style="red",
-        ))
-    else:
-        msg = "Same as last check - still no engulfing pattern" if repeated else "No engulfing pattern"
-        console.print(f"[dim]{msg} @ {ts}[/dim]")
-
-
-def check_and_report(symbol, history, ts, last_result=None):
-    """history: list of the most recent CLOSED candles (oldest -> newest,
-    up to 10). The last two entries are the pair being checked."""
-    prev, curr = history[-2], history[-1]
-
-    console.print(f"[bold blue]Candle closed[/bold blue] @ {ts}")
-    print_candle_table(symbol, prev, curr, ts)
-
-    if is_bullish_engulfing(prev, curr):
-        result = "bull"
-    elif is_bearish_engulfing(prev, curr):
-        result = "bear"
-    else:
-        result = None
-
-    announce_pattern(result, symbol, ts, repeated=(result == last_result))
-
-    if result is not None:
-        json_path = save_signal_json(symbol, result, prev, curr, ts)
-        png_path = export_chart_png(symbol, result, history, ts)
-        console.print(
-            f"[dim]Saved log -> {json_path}[/dim]\n"
-            f"[dim]Saved chart -> {png_path}[/dim]"
-        )
-
-    return result
-
-
-def handle_candle_close(symbol, history, ts, last_result, active_trade, point_size):
-    """Runs on every candle close: checks any active trade for TP/SL,
-    then runs pattern detection, and opens a new trade to follow if a
-    fresh signal fires and nothing is already being followed."""
-    curr = history[-1]
-
-    if active_trade is not None:
-        outcome, ambiguous = check_trade(active_trade, curr)
-        if outcome:
-            trade_result = report_trade_result(active_trade, outcome, curr, ambiguous)
-            png_path = export_trade_result_chart(trade_result, history)
-            console.print(f"[dim]Saved trade chart -> {png_path}[/dim]")
-            active_trade = None
-
-    new_result = check_and_report(symbol, history, ts, last_result)
-
-    if new_result is not None and active_trade is None:
-        entry_price = curr["close"]
-        active_trade = open_trade(symbol, new_result, entry_price, curr["time"], point_size)
-        update_signal_json_with_trade(ts, active_trade)
-        direction_label = "BULLISH" if new_result == "bull" else "BEARISH"
-        console.print(Panel(
-            f"[bold]Following {symbol} {direction_label}[/bold]\n"
-            f"Entry: {entry_price:.3f}\n"
-            f"TP: {active_trade['tp_price']:.3f}  (+{TP_POINTS} pts)\n"
-            f"SL: {active_trade['sl_price']:.3f}  (-{SL_POINTS} pts)",
-            border_style="cyan",
-            title="Trade opened - following until TP/SL",
-        ))
-    elif new_result is not None and active_trade is not None:
-        console.print("[dim]Signal logged but not followed - a trade is already active.[/dim]")
-
-    return new_result, active_trade
-
-
-def wait_with_countdown(seconds, label):
-    seconds = max(0, seconds)
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TimeRemainingColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task(label, total=seconds)
-        remaining = seconds
-        while remaining > 0:
-            step = min(1, remaining)
-            time.sleep(step)
-            progress.update(task, advance=step)
-            remaining -= step
-
-
-def seconds_until_next_close(tf_seconds):
-    now = datetime.now()
-    epoch = now.timestamp()
-    next_boundary = (int(epoch) // tf_seconds + 1) * tf_seconds
-    wait_seconds = next_boundary - epoch
-    return wait_seconds, datetime.fromtimestamp(next_boundary)
-
-
-# --------------------------------------------------------------------------
-# Modes
-# --------------------------------------------------------------------------
-
-def run_live():
-    login = IntPrompt.ask("Account ID (login)")
-    password = Prompt.ask("Password", password=False)
-    server = Prompt.ask("Server")
-    symbol = Prompt.ask("Symbol", default="EURUSD").strip().upper()
-    tf_key = Prompt.ask("Timeframe", choices=list(TIMEFRAMES.keys()), default="M1")
-    tf_seconds = TIMEFRAMES[tf_key]
-
-    mt5 = connect_live(login, password, server)
-
-    if not mt5.symbol_select(symbol, True):
-        mt5.shutdown()
-        console.print(f"[bold red]Symbol '{symbol}' not found or not visible in Market Watch.[/bold red]")
-        raise SystemExit(1)
-
-    info = mt5.symbol_info(symbol)
-    point_size = info.point if info and info.point else 0.01
-    console.print(f"[dim]Using point size {point_size} for {symbol} (TP {TP_POINTS} pts / SL {SL_POINTS} pts).[/dim]")
-
-    console.print(f"[bold]Watching {symbol} on {tf_key}.[/bold] Press Ctrl+C to stop.\n")
-
-    last_result = None
-    active_trade = None
-    try:
-        while True:
-            wait_s, next_close = seconds_until_next_close(tf_seconds)
-            total_wait = wait_s + 2  # buffer for broker to publish the bar
-            wait_with_countdown(
-                total_wait,
-                f"Next {tf_key} candle closes at {next_close.strftime('%H:%M:%S')}",
-            )
-            history = get_live_closed_candles(mt5, symbol, tf_key, n_closed=10)
-            if not history or len(history) < 2:
-                console.print("[yellow]Not enough candle data returned, skipping this check.[/yellow]")
-                continue
-            last_result, active_trade = handle_candle_close(
-                symbol, history, history[-1]["time"], last_result, active_trade, point_size
-            )
-    except KeyboardInterrupt:
-        console.print("\n[bold]Stopped by user.[/bold]")
-    finally:
-        mt5.shutdown()
 
 
 def run_simulate():
     symbol = Prompt.ask("Symbol (simulated)", default="XAUUSD").strip().upper()
-    tf_key = Prompt.ask("Timeframe label (cosmetic only)", choices=list(TIMEFRAMES.keys()), default="M1")
-    interval = IntPrompt.ask("Seconds between simulated candles (e.g. 3 for a fast demo)", default=3)
-    point_size = float(Prompt.ask("Point size (price value of 1 point)", default="0.01"))
+    tf_key = Prompt.ask("Timeframe label", choices=list(TIMEFRAMES.keys()), default="M1")
+    interval = IntPrompt.ask("Seconds between simulated candles", default=3)
+    point_size = float(Prompt.ask("Point size", default="0.01"))
 
     sim = CandleSimulator(symbol)
-    console.print(f"[bold]Simulating {symbol} ({tf_key}) candles every {interval}s.[/bold] Press Ctrl+C to stop.\n")
+    dash = Dashboard(symbol, tf_key, point_size)
+    chart = LiveChart()
+    chart.start()
 
-    last_result = None
-    active_trade = None
     try:
-        while True:
-            wait_with_countdown(interval, "Generating next simulated candle")
-            sim.next_candle()
-            history = sim.last_n(10)
-            if not history or len(history) < 2:
-                continue
-            ts = history[-1]["time"].strftime("%H:%M:%S")
-            last_result, active_trade = handle_candle_close(
-                symbol, history, ts, last_result, active_trade, point_size
-            )
-    except KeyboardInterrupt:
-        console.print("\n[bold]Simulation stopped by user.[/bold]")
+        with Live(dash.render(), console=console, refresh_per_second=4, screen=False) as live:
+            while True:
+                time.sleep(interval)
+                sim.next_candle()
+                history = sim.last_n(CHART_CANDLES)
+                if not history or len(history) < 2:
+                    continue
 
+                curr = history[-1]
+                prev = history[-2]
+
+                dash.ohlc = curr
+                dash.candle_ts = curr["time"].strftime("%H:%M:%S")
+                dash.chart_candles = history[-CHART_CANDLES:]
+                chart.update_candles(history)
+                chart.update_price(curr["close"], curr["close"] + point_size * 5)
+
+                if is_bullish_engulfing(prev, curr):
+                    label = "LONG"
+                    dash.add_event(f"New [bold]{label}[/bold] signal @ {curr['close']:.5f}")
+                elif is_bearish_engulfing(prev, curr):
+                    label = "SHORT"
+                    dash.add_event(f"New [bold]{label}[/bold] signal @ {curr['close']:.5f}")
+
+                dash.status_line = "[green]Simulating...[/green]"
+                live.update(dash.render())
+    except KeyboardInterrupt:
+        console.print("\n[bold]Simulation stopped.[/bold]")
+    finally:
+        chart.stop()
+
+
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
 
 def main():
     console.print(Panel.fit(
-        "[bold cyan]Engulfing Candle Watcher[/bold cyan]\nLive MT5 detection or a synthetic candle simulator.",
+        "[bold cyan]Engulfing Candle Watcher[/bold cyan]\n"
+        "Live MT5 (real trades + live chart) or simulation mode.",
         border_style="cyan",
     ))
     mode = Prompt.ask("Mode", choices=["live", "simulate"], default="simulate")

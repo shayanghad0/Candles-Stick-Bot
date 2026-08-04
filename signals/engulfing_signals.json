@@ -1,0 +1,18 @@
+[
+  {
+    "symbol": "XAUUSD",
+    "pattern": "bearish_engulfing",
+    "time": "2026-08-04 10:34:00",
+    "prev_open": 4065.11,
+    "prev_close": 4066.44,
+    "curr_open": 4066.44,
+    "curr_close": 4064.86,
+    "entry_price": 4064.86,
+    "tp_price": 4063.06,
+    "sl_price": 4066.36,
+    "status": "SL_HIT",
+    "tp_status": "Canceled by SL",
+    "sl_status": "hit",
+    "ambiguous": false
+  }
+]
