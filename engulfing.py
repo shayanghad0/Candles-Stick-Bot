@@ -265,7 +265,7 @@ def classify_direction(row):
 # --------------------------------------------------------------------------
 
 def open_trade(symbol, direction, entry_price, entry_time, point_size,
-                tp_points=TP_POINTS, sl_points=SL_POINTS):
+                 tp_points=TP_POINTS, sl_points=SL_POINTS):
     if direction == "bull":
         tp_price = entry_price + tp_points * point_size
         sl_price = entry_price - sl_points * point_size
@@ -284,6 +284,8 @@ def open_trade(symbol, direction, entry_price, entry_time, point_size,
         "sl_points": sl_points,
         "point_size": point_size,
         "status": "open",
+        "tp_status": None,
+        "sl_status": None,
     }
 
 
