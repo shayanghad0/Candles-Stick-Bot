@@ -1,47 +1,61 @@
 """
-Engulfing Candle Watcher for MetaTrader 5 (live dashboard + simulator)
-------------------------------------------------------------------------
+Engulfing Candle Watcher for MetaTrader 5 - REAL orders + live dashboard
+--------------------------------------------------------------------------
+WARNING: In "live" mode this now sends REAL market orders to your MT5
+account (buy/sell with attached TP/SL), unlike earlier versions of
+this script which only simulated trades on paper. Test on a demo
+account first. This is not financial advice and past signals do not
+guarantee future results.
+
 Two modes:
-  1. Live  - logs into your MT5 account, waits for each new candle
-             close on the timeframe you choose, and reports bullish /
-             bearish engulfing patterns on the real market.
-  2. Simulate - no MT5 login needed. Generates synthetic OHLC candles
-             (with occasional guaranteed engulfing setups mixed with
-             random noise) so you can watch the detector work without
-             touching a live/demo account.
+  1. Live  - opens MT5, sends a real market order when a pattern
+             fires (if no position is already open), polls the real
+             position status every <1s, and closes out the trade
+             record the moment MT5 shows the position has actually
+             closed (via its own attached TP/SL, or manually/stop-out).
+  2. Simulate - no MT5 login, no real orders. Simulates a live tick
+             feed and candle formation with paper trades, for testing
+             the detection/UI without touching any account.
 
-Auto-terminal detection: in live mode the script searches common
-install locations for terminal64.exe and connects through that exact
-path, avoiding "stuck session" auth errors from a stale terminal.
+Auto-terminal detection: searches common install locations for
+terminal64.exe and connects through that exact path, avoiding
+"stuck session" auth errors from a stale terminal.
 
-Trade following (SIMULATED - never touches your real MT5 account):
-  When a pattern fires and nothing is already being followed, the
-  script opens a paper trade:
-    Long (bullish):  TP = entry + 180 points, SL = entry - 150 points
-    Short (bearish): TP = entry - 180 points, SL = entry + 150 points
-  It's followed candle-by-candle until TP or SL is touched. If a new
-  signal fires while a trade is already active, it's shown in the
-  console but not logged or followed - only followed trades get
-  written to JSON/PNG.
+------------------------------- BUGFIXES ----------------------------------
+1) "After TP/SL hits, it can't find the trade" - the old close logic
+   used TRADE_ACTION_CLOSE_BY, which only works on hedging accounts
+   with TWO opposite open positions (it closes one position "by"
+   another). This bot only ever opens ONE position, so that action
+   was invalid and would fail. Worse: since TP/SL were already
+   attached to the order, the broker's server closes the position
+   automatically the moment price touches either level - by the time
+   the bot got around to trying to close it "manually", positions_get()
+   already returned empty, which is exactly the "can't find the
+   trade" symptom. FIX: stop trying to close positions manually.
+   Instead, poll positions_get(ticket=...) every tick; once the
+   position is gone, read the exact close reason and price from
+   history_deals_get(position=ticket) - MT5 tags that deal with
+   DEAL_REASON_SL or DEAL_REASON_TP directly, so there's no guessing.
 
-Same-candle TP/SL ambiguity: OHLC alone can't tell which level was
-touched first inside one bar. If both are in range, it's counted as
-SL (the conservative/worse outcome) and flagged "ambiguous": true.
+2) Buy/sell TP/SL inconsistency - TP/SL used to be computed from the
+   candle's close price, then the real order filled at the live
+   ask/bid (which differs due to spread), leaving stops slightly
+   mismatched from the real entry. FIX: TP/SL are now computed from
+   the exact same tick price used to send the order.
 
-UI: a single live-updating dashboard panel showing:
-  - status / countdown
-  - latest closed candle OHLC
-  - a small ASCII candlestick chart of the last ~15 candles
-  - a table of ALL trades this session (long/short, entry, current
-    price, PnL in points, PnL in %)
-  - a short rolling log of recent events
-No more scrolling panel-per-candle spam.
+3) Order reliability - added volume normalization to the symbol's
+   min/max/step, a spread guard (skip the trade if spread is too wide
+   relative to TP/SL), and retries across FOK/IOC/RETURN filling modes
+   since brokers differ in which one they accept.
+
+4) Strategy precision - added a minimum engulfing body size filter so
+   tiny/noise candles don't count as a signal.
 
 Requirements:
     pip install rich MetaTrader5 pandas matplotlib
 
-This script is for educational / technical-analysis purposes only.
-It does not place trades and is not financial advice.
+This script is for educational / technical-analysis purposes only and
+is not financial advice. Live mode places real orders with real money.
 """
 
 import glob
@@ -54,7 +68,7 @@ from datetime import datetime
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
-from rich.prompt import Prompt, IntPrompt
+from rich.prompt import Prompt, IntPrompt, Confirm
 from rich.table import Table
 from rich.rule import Rule
 from rich.text import Text
@@ -70,13 +84,16 @@ SIGNALS_DIR = "signals"
 JSON_LOG_PATH = os.path.join(SIGNALS_DIR, "engulfing_signals.json")
 CHARTS_DIR = os.path.join(SIGNALS_DIR, "charts")
 
-# Simulated trade thresholds, in broker "points" (smallest quoted
-# price increment). Same thresholds for long and short.
 TP_POINTS = 180
 SL_POINTS = 150
 
-CHART_CANDLES = 15   # candles shown in the ASCII chart
-CHART_HEIGHT = 12    # rows of the ASCII chart
+# --- strategy precision filters ---
+MIN_BODY_POINTS = 40         # ignore engulfing candles whose body is smaller than this (noise filter)
+MAX_SPREAD_POINTS = 50       # skip entries if the live spread is wider than this many points
+
+CHART_CANDLES = 15
+CHART_HEIGHT = 12
+TICK_INTERVAL = 0.5           # seconds between live checks - under 1s
 
 
 # --------------------------------------------------------------------------
@@ -108,7 +125,7 @@ def connect_live(login, password, server, retries=3):
     last_error = None
     with console.status("", spinner="dots") as status:
         for attempt in range(1, retries + 1):
-            status.update(f"[cyan]Connecting (attempt {attempt}/{retries})...[/cyan]  {path_line}")
+            status.update(f"[cyan]Opening MT5 (attempt {attempt}/{retries})...[/cyan]  {path_line}")
             mt5.shutdown()
             time.sleep(1)
 
@@ -119,7 +136,7 @@ def connect_live(login, password, server, retries=3):
 
             if mt5.login(login, password=password, server=server):
                 console.print(Panel(
-                    f"{path_line}\n[bold green]Connected[/bold green] - account {login} @ {server}",
+                    f"{path_line}\n[bold green]MT5 OPENED[/bold green] - account {login} @ {server}",
                     title="MT5 Auto-Terminal", border_style="green",
                 ))
                 return mt5
@@ -128,7 +145,7 @@ def connect_live(login, password, server, retries=3):
 
     mt5.shutdown()
     console.print(Panel(
-        f"[bold red]Could not connect after {retries} attempts.[/bold red]\n"
+        f"[bold red]Could not open MT5 after {retries} attempts.[/bold red]\n"
         f"Last error: {last_error}\n\n"
         "Checklist:\n"
         "  1. Fully quit MT5 (check Task Manager for terminal64.exe) and retry.\n"
@@ -141,6 +158,11 @@ def connect_live(login, password, server, retries=3):
     raise SystemExit(1)
 
 
+def close_live(mt5):
+    mt5.shutdown()
+    console.print(Panel("[bold red]MT5 CLOSED[/bold red]", title="MT5 Auto-Terminal", border_style="red"))
+
+
 def get_live_closed_candles(mt5, symbol, tf_key, n_closed=CHART_CANDLES):
     import pandas as pd
     tf_const = getattr(mt5, f"TIMEFRAME_{tf_key}")
@@ -149,53 +171,28 @@ def get_live_closed_candles(mt5, symbol, tf_key, n_closed=CHART_CANDLES):
         return None
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s")
-    return df.to_dict("records")[:-1]  # drop the still-forming bar
+    return df.to_dict("records")[:-1]
 
 
 def get_live_tick(mt5, symbol):
-    """Fetch the latest tick (bid/ask/last) for the symbol. Returns dict or None."""
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         return None
     info = mt5.symbol_info(symbol)
     digits = info.digits if info else 5
     point = info.point if info else 0.00001
-    spread = info.spread if info else 0
+    spread_pts = round((tick.ask - tick.bid) / point) if point else 0
     return {
-        "bid": round(tick.bid, digits),
-        "ask": round(tick.ask, digits),
-        "last": round(tick.last, digits) if tick.last else tick.bid,
-        "spread": spread,
+        "bid": tick.bid, "ask": tick.ask,
+        "last": tick.last if tick.last else tick.bid,
+        "spread_points": spread_pts,
         "spread_price": round(tick.ask - tick.bid, digits),
         "time": datetime.fromtimestamp(tick.time),
     }
 
 
-def get_forming_candle(mt5, symbol, tf_key):
-    """Get the current still-forming candle (open/high/low/close from live ticks)."""
-    import pandas as pd
-    tf_const = getattr(mt5, f"TIMEFRAME_{tf_key}")
-    rates = mt5.copy_rates_from_pos(symbol, tf_const, 0, 1)
-    if rates is None or len(rates) < 1:
-        return None
-    rate = rates[0]
-    info = mt5.symbol_info(symbol)
-    digits = info.digits if info else 5
-    tick = mt5.symbol_info_tick(symbol)
-    if tick is None:
-        return None
-    last_price = tick.last if tick.last else tick.bid
-    return {
-        "time": datetime.fromtimestamp(rate["time"]),
-        "open": round(rate["open"], digits),
-        "high": round(rate["high"], digits),
-        "low": round(rate["low"], digits),
-        "close": round(last_price, digits),
-    }
-
-
 # --------------------------------------------------------------------------
-# Candle simulator
+# Candle simulator (paper trading only, no MT5 needed)
 # --------------------------------------------------------------------------
 
 class CandleSimulator:
@@ -251,20 +248,28 @@ class CandleSimulator:
 
 
 # --------------------------------------------------------------------------
-# Pattern detection
+# Pattern detection (with a minimum body filter for precision)
 # --------------------------------------------------------------------------
 
-def is_bullish_engulfing(prev, curr):
+def _body_points(candle, point_size):
+    return abs(candle["close"] - candle["open"]) / point_size if point_size else 0
+
+
+def is_bullish_engulfing(prev, curr, point_size=None):
     prev_bearish = prev["close"] < prev["open"]
     curr_bullish = curr["close"] > curr["open"]
     engulfs = curr["open"] <= prev["close"] and curr["close"] >= prev["open"]
+    if point_size and _body_points(curr, point_size) < MIN_BODY_POINTS:
+        return False
     return prev_bearish and curr_bullish and engulfs
 
 
-def is_bearish_engulfing(prev, curr):
+def is_bearish_engulfing(prev, curr, point_size=None):
     prev_bullish = prev["close"] > prev["open"]
     curr_bearish = curr["close"] < curr["open"]
     engulfs = curr["open"] >= prev["close"] and curr["close"] <= prev["open"]
+    if point_size and _body_points(curr, point_size) < MIN_BODY_POINTS:
+        return False
     return prev_bullish and curr_bearish and engulfs
 
 
@@ -285,7 +290,8 @@ def save_signal_json(symbol, pattern, prev, curr, ts, trade):
         "prev_open": prev["open"], "prev_close": prev["close"],
         "curr_open": curr["open"], "curr_close": curr["close"],
         "entry_price": trade["entry_price"], "tp_price": trade["tp_price"], "sl_price": trade["sl_price"],
-        "status": "open", "tp_status": None, "sl_status": None, "ambiguous": None,
+        "lot": trade.get("lot"), "ticket": trade.get("ticket"),
+        "status": "open", "tp_status": None, "sl_status": None,
     }
     data = []
     if os.path.exists(JSON_LOG_PATH):
@@ -300,7 +306,7 @@ def save_signal_json(symbol, pattern, prev, curr, ts, trade):
     return JSON_LOG_PATH
 
 
-def update_signal_json_status(entry_time, tp_status, sl_status, status, ambiguous=False):
+def update_signal_json_status(entry_time, tp_status, sl_status, status, exit_price=None, profit=None):
     if not os.path.exists(JSON_LOG_PATH):
         return
     try:
@@ -314,7 +320,10 @@ def update_signal_json_status(entry_time, tp_status, sl_status, status, ambiguou
             entry["tp_status"] = tp_status
             entry["sl_status"] = sl_status
             entry["status"] = status
-            entry["ambiguous"] = ambiguous
+            if exit_price is not None:
+                entry["exit_price"] = exit_price
+            if profit is not None:
+                entry["profit"] = profit
             break
     with open(JSON_LOG_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, default=str)
@@ -372,7 +381,7 @@ def export_trade_result_chart(trade_result, history):
     import matplotlib.pyplot as plt
 
     os.makedirs(CHARTS_DIR, exist_ok=True)
-    candles = history[-10:]
+    candles = history[-10:] if history else []
     fig, ax = plt.subplots(figsize=(10, 6))
 
     for i, c in enumerate(candles):
@@ -388,16 +397,15 @@ def export_trade_result_chart(trade_result, history):
 
     win = trade_result["status"] == "TP_HIT"
     outcome_text = "TP HIT (WIN)" if win else "SL HIT (LOSS)"
-    if trade_result.get("ambiguous"):
-        outcome_text += " *ambiguous candle*"
     outcome_color = "#2ecc71" if win else "#e74c3c"
     ax.set_title(f"{trade_result['symbol']} {trade_result['direction'].upper()} - {outcome_text}",
                  color=outcome_color, fontweight="bold")
     ax.legend(loc="upper left", fontsize=8)
 
-    labels = [c["time"].strftime("%H:%M") if hasattr(c["time"], "strftime") else str(c["time"]) for c in candles]
-    ax.set_xticks(range(len(candles)))
-    ax.set_xticklabels(labels, rotation=45, ha="right")
+    if candles:
+        labels = [c["time"].strftime("%H:%M") if hasattr(c["time"], "strftime") else str(c["time"]) for c in candles]
+        ax.set_xticks(range(len(candles)))
+        ax.set_xticklabels(labels, rotation=45, ha="right")
     ax.set_ylabel("Price")
     ax.margins(x=0.05)
     fig.tight_layout()
@@ -411,128 +419,199 @@ def export_trade_result_chart(trade_result, history):
 
 
 # --------------------------------------------------------------------------
-# Trade following - real MT5 orders
+# LIVE mode: real MT5 orders
 # --------------------------------------------------------------------------
 
-def mt5_open_position(mt5, symbol, direction, lot, tp_price, sl_price):
-    """Send a market order to MT5. Returns (ticket, price) or (None, error)."""
+def mt5_open_position(mt5, symbol, direction, lot, point_size,
+                       tp_points=TP_POINTS, sl_points=SL_POINTS,
+                       max_spread_points=MAX_SPREAD_POINTS):
+    """Sends a real market order with TP/SL attached, computed from
+    the SAME tick used for entry (fixes the old close-vs-fill mismatch).
+    Tries FOK -> IOC -> RETURN filling modes since brokers differ in
+    which one they accept. Returns a dict with either the fill info
+    or an 'error' key - never raises.
+
+    BUGFIX (entry hit -> TP hit -> position never closed -> SL also
+    hit): two real problems were compounding here:
+
+    1) result.order is the ORDER ticket, not necessarily the POSITION
+       ticket - on many brokers/account types they differ. Using the
+       wrong id meant positions_get(ticket=...) could never find the
+       real position, so the bot never noticed it was still open (or
+       thought it was already closed when it wasn't). Fixed by
+       resolving the true position id from the opening deal:
+       history_deals_get(ticket=result.deal)[0].position_id.
+
+    2) Some brokers (Market Execution accounts) silently DROP the
+       tp/sl fields on the initial TRADE_ACTION_DEAL and require a
+       separate TRADE_ACTION_SLTP request to attach stops to the
+       resulting position. If that happens, no server-side TP/SL
+       exists at all - price can sail straight through both levels
+       with nothing to close it. Fixed by verifying the position's
+       actual sl/tp after opening and re-attaching them via
+       TRADE_ACTION_SLTP if the broker dropped them.
+    """
     info = mt5.symbol_info(symbol)
     if info is None:
-        return None, f"symbol_info returned None for {symbol}"
+        return {"error": f"symbol_info returned None for {symbol}"}
     if not info.visible:
         mt5.symbol_select(symbol, True)
 
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
-        return None, "symbol_info_tick returned None"
+        return {"error": "symbol_info_tick returned None"}
+
+    spread_points = round((tick.ask - tick.bid) / point_size) if point_size else 0
+    if max_spread_points and spread_points > max_spread_points:
+        return {"error": f"spread too wide ({spread_points} pts > max {max_spread_points} pts) - skipped"}
 
     if direction == "bull":
         order_type = mt5.ORDER_TYPE_BUY
         price = tick.ask
+        tp_price = price + tp_points * point_size
+        sl_price = price - sl_points * point_size
     else:
         order_type = mt5.ORDER_TYPE_SELL
         price = tick.bid
+        tp_price = price - tp_points * point_size
+        sl_price = price + sl_points * point_size
 
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": lot,
-        "type": order_type,
-        "price": price,
-        "tp": tp_price,
-        "sl": sl_price,
-        "deviation": 20,
-        "magic": 234000,
-        "comment": "engulfing",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_FOK,
-    }
-    result = mt5.order_send(request)
-    if result is None:
-        return None, "order_send returned None"
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        return None, f"retcode={result.retcode} comment={result.comment}"
-    return result.order, result.price
+    step = info.volume_step or 0.01
+    lot = max(info.volume_min, min(info.volume_max, round(lot / step) * step))
 
-
-def mt5_close_position(mt5, symbol, direction, ticket, lot):
-    """Close an open position by sending an opposite market order."""
-    # Find position by symbol and direction
-    positions = mt5.positions_get(symbol=symbol)
-    if positions is None or len(positions) == 0:
-        return None, f"No positions found for {symbol}"
-    
-    # Find the position matching our direction
-    pos = None
-    for p in positions:
-        if (direction == "bull" and p.type == mt5.ORDER_TYPE_BUY) or \
-           (direction == "bear" and p.type == mt5.ORDER_TYPE_SELL):
-            pos = p
+    last_result = None
+    result = None
+    for filling in (mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_RETURN):
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": lot,
+            "type": order_type, "price": price, "tp": tp_price, "sl": sl_price,
+            "deviation": 20, "magic": 234000, "comment": "engulfing",
+            "type_time": mt5.ORDER_TIME_GTC, "type_filling": filling,
+        }
+        result = mt5.order_send(request)
+        last_result = result
+        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
             break
-    
-    if pos is None:
-        return None, f"No {direction} position found for {symbol}"
-    
-    # Use TRADE_ACTION_CLOSE_BY to close the position
-    request = {
-        "action": mt5.TRADE_ACTION_CLOSE_BY,
-        "position": pos.ticket,
-        "symbol": symbol,
-        "volume": lot,
-        "deviation": 20,
-        "magic": 234000,
-        "comment": "engulfing close",
-    }
-    result = mt5.order_send(request)
-    if result is None:
-        return None, "order_send returned None"
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        return None, f"retcode={result.retcode} comment={result.comment}"
-    return result.order, pos.price
+    else:
+        retcode = last_result.retcode if last_result else "?"
+        comment = last_result.comment if last_result else "order_send returned None"
+        return {"error": f"retcode={retcode} comment={comment}"}
 
-def open_trade(symbol, direction, entry_price, entry_time, point_size, lot, ticket=None,
-               tp_points=TP_POINTS, sl_points=SL_POINTS):
+    # Resolve the REAL position id from the opening deal - not result.order.
+    position_id = result.order
+    deal_ticket = getattr(result, "deal", None)
+    if deal_ticket:
+        deals = mt5.history_deals_get(ticket=deal_ticket)
+        if deals:
+            position_id = deals[0].position_id
+
+    # Verify the broker actually attached our SL/TP to the position.
+    # If not (common on Market Execution accounts), attach them now
+    # with a follow-up modify request.
+    sltp_warning = None
+    positions = mt5.positions_get(ticket=position_id)
+    if positions:
+        pos = positions[0]
+        if abs(pos.tp - tp_price) > point_size or abs(pos.sl - sl_price) > point_size:
+            modify_request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "symbol": symbol,
+                "position": position_id,
+                "tp": tp_price,
+                "sl": sl_price,
+            }
+            modify_result = mt5.order_send(modify_request)
+            if not modify_result or modify_result.retcode != mt5.TRADE_RETCODE_DONE:
+                sltp_warning = (f"broker did not accept inline TP/SL and the follow-up "
+                                f"TRADE_ACTION_SLTP fix also failed (retcode="
+                                f"{modify_result.retcode if modify_result else '?'}) - "
+                                f"this position may have NO server-side stop")
+    else:
+        sltp_warning = "position not found immediately after opening - could not verify SL/TP attached"
+
+    return {"ticket": position_id, "price": result.price,
+            "tp_price": tp_price, "sl_price": sl_price, "lot": lot,
+            "warning": sltp_warning}
+
+
+def mt5_manually_close_position(mt5, symbol, position_id, direction, lot):
+    """Correctly close ONE position: send an OPPOSITE market order with
+    the 'position' field set to its ticket. This is the right way -
+    unlike the old broken TRADE_ACTION_CLOSE_BY (which only closes one
+    position "by" an opposite one on hedging accounts, and this bot
+    never has two opposite positions open). Used as a safety net if
+    the broker's own attached SL/TP never actually fires, so a stuck
+    position can't block every future signal forever."""
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return {"error": "symbol_info_tick returned None"}
     if direction == "bull":
-        tp_price = entry_price + tp_points * point_size
-        sl_price = entry_price - sl_points * point_size
+        close_type, price = mt5.ORDER_TYPE_SELL, tick.bid
     else:
-        tp_price = entry_price - tp_points * point_size
-        sl_price = entry_price + sl_points * point_size
-    return {
-        "symbol": symbol, "direction": direction, "entry_price": entry_price,
-        "entry_time": _ts_str(entry_time), "tp_price": tp_price, "sl_price": sl_price,
-        "tp_points": tp_points, "sl_points": sl_points, "point_size": point_size,
-        "lot": lot, "ticket": ticket,
-        "status": "open", "tp_status": None, "sl_status": None,
-        "current_price": entry_price,
-    }
+        close_type, price = mt5.ORDER_TYPE_BUY, tick.ask
+
+    last_result = None
+    for filling in (mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_RETURN):
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": lot,
+            "type": close_type, "position": position_id, "price": price,
+            "deviation": 20, "magic": 234000, "comment": "engulfing safety close",
+            "type_time": mt5.ORDER_TIME_GTC, "type_filling": filling,
+        }
+        result = mt5.order_send(request)
+        last_result = result
+        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+            return {"price": result.price}
+
+    retcode = last_result.retcode if last_result else "?"
+    comment = last_result.comment if last_result else "order_send returned None"
+    return {"error": f"retcode={retcode} comment={comment}"}
 
 
-def check_trade(trade, candle):
-    if trade["direction"] == "bull":
-        hit_tp = candle["high"] >= trade["tp_price"]
-        hit_sl = candle["low"] <= trade["sl_price"]
+def check_position_status(mt5, trade):
+    """Poll the REAL position every tick. Returns None while still
+    open. Once MT5 shows it closed - via its own attached TP/SL, a
+    stop-out, or manual close - reads the exact close reason and
+    price from the deal history (DEAL_REASON_SL / DEAL_REASON_TP),
+    instead of guessing or trying to close it again ourselves."""
+    ticket = trade.get("ticket")
+    if not ticket:
+        return None
+
+    positions = mt5.positions_get(ticket=ticket)
+    if positions:
+        return None  # still open
+
+    deals = mt5.history_deals_get(position=ticket)
+    if not deals:
+        return None  # broker hasn't published the closing deal yet - keep polling
+
+    close_deal = None
+    for d in deals:
+        if d.entry == mt5.DEAL_ENTRY_OUT:
+            close_deal = d
+            break
+    if close_deal is None:
+        return None
+
+    if close_deal.reason == mt5.DEAL_REASON_SL:
+        outcome = "sl"
+    elif close_deal.reason == mt5.DEAL_REASON_TP:
+        outcome = "tp"
     else:
-        hit_tp = candle["low"] <= trade["tp_price"]
-        hit_sl = candle["high"] >= trade["sl_price"]
-    if hit_tp and hit_sl:
-        return "sl", True
-    if hit_tp:
-        return "tp", False
-    if hit_sl:
-        return "sl", False
-    return None, False
+        # closed some other way (manual/stop-out) - classify by nearer level
+
+        outcome = "tp" if abs(close_deal.price - trade["tp_price"]) < abs(close_deal.price - trade["sl_price"]) else "sl"
+
+    return {"outcome": outcome, "exit_price": close_deal.price,
+            "profit": close_deal.profit, "time": datetime.fromtimestamp(close_deal.time)}
 
 
 def pnl_for(trade):
-    """Returns (pnl_points, pnl_pct) given trade['current_price']."""
     entry = trade["entry_price"]
     current = trade["current_price"]
     point_size = trade["point_size"] or 0.01
-    if trade["direction"] == "bull":
-        diff = current - entry
-    else:
-        diff = entry - current
+    diff = (current - entry) if trade["direction"] == "bull" else (entry - current)
     pnl_points = diff / point_size
     pnl_pct = (diff / entry) * 100 if entry else 0.0
     return pnl_points, pnl_pct
@@ -542,8 +621,7 @@ def pnl_for(trade):
 # Live dashboard
 # --------------------------------------------------------------------------
 
-def render_ascii_chart(candles, height=CHART_HEIGHT):
-    """Small in-terminal candlestick chart using block characters. Forming candle shown in cyan."""
+def render_ascii_chart(candles, height=CHART_HEIGHT, forming_idx=None):
     if not candles:
         return Text("(no candle data yet)", style="dim")
 
@@ -559,11 +637,9 @@ def render_ascii_chart(candles, height=CHART_HEIGHT):
 
     grid = [[(" ", None) for _ in candles] for _ in range(height)]
     for i, c in enumerate(candles):
-        is_forming = c.get("forming", False)
-        if is_forming:
+        color = "green" if c["close"] >= c["open"] else "red"
+        if forming_idx is not None and i == forming_idx:
             color = "cyan"
-        else:
-            color = "green" if c["close"] >= c["open"] else "red"
         top_row, bot_row = row_for(c["high"]), row_for(c["low"])
         body_top, body_bot = row_for(max(c["open"], c["close"])), row_for(min(c["open"], c["close"]))
         for r in range(top_row, bot_row + 1):
@@ -581,12 +657,9 @@ def render_ascii_chart(candles, height=CHART_HEIGHT):
                 row_text.append("  ")
         lines.append(row_text)
 
-    # Mark forming candle in axis
-    forming_idx = len(candles) - 1 if candles and candles[-1].get("forming") else -1
     axis = Text(f"  high {top:.3f}" + " " * max(0, len(candles) * 2 - 20) + f"low {bottom:.3f}", style="dim")
-    if forming_idx >= 0:
-        lines.append(Text("  " + "  " * forming_idx + "\u25bc forming", style="cyan"))
-    return Group(*lines, axis)
+    note = Text("  (last bar = still forming)", style="dim") if forming_idx is not None else Text("")
+    return Group(*lines, axis, note)
 
 
 class Dashboard:
@@ -596,11 +669,12 @@ class Dashboard:
         self.point_size = point_size
         self.status_line = "Starting..."
         self.chart_candles = []
+        self.forming_present = False
         self.ohlc = None
         self.candle_ts = "-"
-        self.trades = []  # session trade history, most recent last
+        self.live_tick = None
+        self.trades = []
         self.events = []
-        self.live_tick = None  # latest tick from MT5 (bid/ask/last/spread)
 
     def add_event(self, text):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -616,33 +690,26 @@ class Dashboard:
 
         if self.live_tick:
             t = self.live_tick
-            bid_color = "green" if t["bid"] >= (self.ohlc["close"] if self.ohlc else t["bid"]) else "red"
-            ask_color = "green" if t["ask"] >= (self.ohlc["close"] if self.ohlc else t["ask"]) else "red"
-            last_color = "green" if t["last"] >= (self.ohlc["close"] if self.ohlc else t["last"]) else "red"
-            tick_time = t["time"].strftime("%H:%M:%S.") + f"{t['time'].microsecond // 1000:03d}"
-            live_price_text = Text.from_markup(
-                f"  BID [{bid_color} bold]{t['bid']:.5f}[/{bid_color} bold]   "
-                f"ASK [{ask_color} bold]{t['ask']:.5f}[/{ask_color} bold]   "
-                f"LAST [{last_color} bold]{t['last']:.5f}[/{last_color} bold]   "
-                f"SPREAD [yellow]{t['spread']}[/yellow] pts "
-                f"({t['spread_price']:.5f})   "
-                f"[dim]@ {tick_time}[/dim]"
+            live_text = Text.from_markup(
+                f"BID [bold]{t['bid']:.5f}[/bold]   ASK [bold]{t['ask']:.5f}[/bold]   "
+                f"spread [yellow]{t['spread_points']}pts[/yellow]  "
+                f"[dim]@ {t['time'].strftime('%H:%M:%S')}[/dim]"
             )
         else:
-            live_price_text = Text("  (waiting for tick data...)", style="dim")
+            live_text = Text("(waiting for first tick)", style="dim")
 
         if self.ohlc:
             o, h, l, c = self.ohlc["open"], self.ohlc["high"], self.ohlc["low"], self.ohlc["close"]
             direction_color = "green" if c >= o else "red"
             ohlc_text = Text.from_markup(
                 f"O [bold]{o:.3f}[/bold]   H [bold]{h:.3f}[/bold]   "
-                f"L [bold]{l:.3f}[/bold]   C [{direction_color}]{c:.3f}[/{direction_color}]   "
-                f"@ {self.candle_ts}"
+                f"L [bold]{l:.3f}[/bold]   C [{direction_color}]{c:.3f}[/{direction_color}]   @ {self.candle_ts}"
             )
         else:
             ohlc_text = Text("(waiting for first closed candle)", style="dim")
 
-        chart = render_ascii_chart(self.chart_candles)
+        forming_idx = len(self.chart_candles) - 1 if self.forming_present and self.chart_candles else None
+        chart = render_ascii_chart(self.chart_candles, forming_idx=forming_idx)
 
         trades_table = Table(box=None, pad_edge=False, header_style="bold cyan")
         trades_table.add_column("Side")
@@ -659,15 +726,13 @@ class Dashboard:
                 side_color = "green" if t["direction"] == "bull" else "red"
                 pnl_pts, pnl_pct = pnl_for(t)
                 pnl_color = "green" if pnl_pts >= 0 else "red"
-                status = t["status"]
                 trades_table.add_row(
                     f"[{side_color}]{side}[/{side_color}]",
-                    f"{t.get('lot', 0.01):.2f}",
-                    f"{t['entry_price']:.3f}",
-                    f"{t['current_price']:.3f}",
+                    f"{t.get('lot', 0) or 0:.2f}",
+                    f"{t['entry_price']:.3f}", f"{t['current_price']:.3f}",
                     f"[{pnl_color}]{pnl_pts:+.1f}[/{pnl_color}]",
                     f"[{pnl_color}]{pnl_pct:+.3f}%[/{pnl_color}]",
-                    status,
+                    t["status"],
                 )
         else:
             trades_table.add_row("-", "-", "-", "-", "-", "-", "no trades yet")
@@ -677,10 +742,10 @@ class Dashboard:
         body = Group(
             header,
             Rule(style="dim"),
-            Text.from_markup("[bold]LIVE PRICE[/bold]"),
-            live_price_text,
+            Text.from_markup("[bold]Live price[/bold]"),
+            live_text,
             Rule(style="dim"),
-            Text.from_markup("[bold]OHLC[/bold]"),
+            Text.from_markup("[bold]OHLC (last closed candle)[/bold]"),
             ohlc_text,
             Rule(style="dim"),
             Text.from_markup(f"[bold]Chart[/bold] (last {len(self.chart_candles)} candles)"),
@@ -691,137 +756,13 @@ class Dashboard:
             Rule(style="dim"),
             Text.from_markup("[bold]Recent[/bold]\n" + events_text),
         )
-        return Panel(body, title="Engulfing Watcher", border_style="cyan")
+        title = "Engulfing Watcher - LIVE (REAL ORDERS)" if self.status_line.startswith("[green]Live") else "Engulfing Watcher"
+        return Panel(body, title=title, border_style="cyan")
 
 
-def wait_with_countdown(live, dash, seconds, label, tick_poller=None, candle_updater=None):
-    """Wait with countdown, polling live ticks and updating chart with forming candle."""
-    seconds = max(0, seconds)
-    remaining = seconds
-    poll_interval = 0.5
-    while remaining > 0:
-        dash.status_line = f"[yellow]{label}[/yellow]  ({int(remaining)}s left)"
-        if tick_poller:
-            tick = tick_poller()
-            if tick:
-                dash.live_tick = tick
-        if candle_updater:
-            forming = candle_updater()
-            if forming:
-                # Append forming candle to chart if not already there, or update last
-                if dash.chart_candles and dash.chart_candles[-1].get("forming"):
-                    dash.chart_candles[-1] = {**forming, "forming": True}
-                elif dash.chart_candles:
-                    dash.chart_candles.append({**forming, "forming": True})
-                    # Keep only CHART_CANDLES + 1 (the forming one)
-                    if len(dash.chart_candles) > CHART_CANDLES + 1:
-                        dash.chart_candles = dash.chart_candles[-(CHART_CANDLES + 1):]
-                # Update OHLC preview with forming candle close
-                dash.ohlc = forming
-                dash.candle_ts = "forming"
-        live.update(dash.render())
-        step = min(poll_interval, remaining)
-        time.sleep(step)
-        remaining -= step
-    dash.status_line = "[green]Checking candle...[/green]"
-    if tick_poller:
-        tick = tick_poller()
-        if tick:
-            dash.live_tick = tick
-    live.update(dash.render())
-
-
-def seconds_until_next_close(tf_seconds):
-    now = datetime.now()
-    epoch = now.timestamp()
-    next_boundary = (int(epoch) // tf_seconds + 1) * tf_seconds
-    wait_seconds = next_boundary - epoch
-    return wait_seconds, datetime.fromtimestamp(next_boundary)
-
-
-def handle_candle_close(live, dash, symbol, history, ts, active_trade, point_size,
-                         mt5_instance=None, lot=0.01):
-    curr = history[-1]
-    prev = history[-2]
-
-    dash.ohlc = curr
-    dash.candle_ts = ts
-    dash.chart_candles = history[-CHART_CANDLES:]
-
-    # update PnL of the active trade to this candle's close, live
-    if active_trade is not None:
-        active_trade["current_price"] = curr["close"]
-
-        outcome, ambiguous = check_trade(active_trade, curr)
-        if outcome:
-            exit_price = active_trade["tp_price"] if outcome == "tp" else active_trade["sl_price"]
-            status = "TP_HIT" if outcome == "tp" else "SL_HIT"
-            active_trade["status"] = status
-            active_trade["current_price"] = exit_price
-            active_trade["tp_status"] = "hit" if outcome == "tp" else "Canceled by SL"
-            active_trade["sl_status"] = "hit" if outcome == "sl" else "Canceled by TP"
-            active_trade["ambiguous"] = ambiguous
-
-            # close the real MT5 position
-            if mt5_instance and active_trade.get("ticket"):
-                close_ticket, close_price = mt5_close_position(
-                    mt5_instance, symbol, active_trade["direction"],
-                    active_trade["ticket"], active_trade["lot"])
-                if close_ticket:
-                    active_trade["current_price"] = close_price
-                    dash.add_event(f"[green]MT5 position closed[/green] ticket={close_ticket} "
-                                   f"price={close_price:.5f}")
-                else:
-                    dash.add_event(f"[red]MT5 close failed: {close_price}[/red]")
-
-            update_signal_json_status(active_trade["entry_time"], active_trade["tp_status"],
-                                       active_trade["sl_status"], status, ambiguous)
-            png_path = export_trade_result_chart(active_trade, history)
-
-            label = "TP HIT" if outcome == "tp" else "SL HIT"
-            amb_note = " (ambiguous candle - counted as SL)" if ambiguous else ""
-            dash.add_event(f"[bold]{label}[/bold]{amb_note} {symbol} {active_trade['direction']} "
-                            f"@ {exit_price:.3f} -> {png_path}")
-            active_trade = None
-
-    # pattern detection
-    if is_bullish_engulfing(prev, curr):
-        result = "bull"
-    elif is_bearish_engulfing(prev, curr):
-        result = "bear"
-    else:
-        result = None
-
-    if result is not None:
-        if active_trade is None:
-            entry_price = curr["close"]
-            active_trade = open_trade(symbol, result, entry_price, curr["time"], point_size, lot)
-
-            # place real MT5 order
-            if mt5_instance:
-                mt5_ticket, mt5_price = mt5_open_position(
-                    mt5_instance, symbol, result, lot,
-                    active_trade["tp_price"], active_trade["sl_price"])
-                if mt5_ticket:
-                    active_trade["ticket"] = mt5_ticket
-                    active_trade["entry_price"] = mt5_price
-                    dash.add_event(f"[green]MT5 order filled[/green] ticket={mt5_ticket} "
-                                   f"price={mt5_price:.5f}")
-                else:
-                    dash.add_event(f"[red]MT5 order FAILED: {mt5_price}[/red]")
-
-            json_path = save_signal_json(symbol, result, prev, curr, ts, active_trade)
-            export_chart_png(symbol, result, history, ts)
-            dash.trades.append(active_trade)
-            label = "LONG" if result == "bull" else "SHORT"
-            dash.add_event(f"New [bold]{label}[/bold] trade ({lot} lot): entry {active_trade['entry_price']:.3f} "
-                            f"TP {active_trade['tp_price']:.3f} SL {active_trade['sl_price']:.3f}")
-        else:
-            dash.add_event(f"{'Bullish' if result == 'bull' else 'Bearish'} pattern seen - "
-                            f"not followed (trade already active)")
-
-    live.update(dash.render())
-    return active_trade
+def seconds_until_next_close_epoch(tf_seconds):
+    now = datetime.now().timestamp()
+    return (int(now) // tf_seconds + 1) * tf_seconds
 
 
 # --------------------------------------------------------------------------
@@ -829,6 +770,15 @@ def handle_candle_close(live, dash, symbol, history, ts, active_trade, point_siz
 # --------------------------------------------------------------------------
 
 def run_live():
+    console.print(Panel(
+        "[bold yellow]This mode places REAL market orders on your MT5 account.[/bold yellow]\n"
+        "Test on a demo account first. Not financial advice.",
+        border_style="yellow",
+    ))
+    if not Confirm.ask("Continue with LIVE real-order trading?", default=False):
+        console.print("Cancelled.")
+        return
+
     login = IntPrompt.ask("Account ID (login)")
     password = Prompt.ask("Password", password=False)
     server = Prompt.ask("Server")
@@ -840,7 +790,7 @@ def run_live():
     mt5 = connect_live(login, password, server)
 
     if not mt5.symbol_select(symbol, True):
-        mt5.shutdown()
+        close_live(mt5)
         console.print(f"[bold red]Symbol '{symbol}' not found or not visible in Market Watch.[/bold red]")
         raise SystemExit(1)
 
@@ -849,30 +799,140 @@ def run_live():
 
     dash = Dashboard(symbol, tf_key, point_size)
     active_trade = None
+    history = get_live_closed_candles(mt5, symbol, tf_key, n_closed=CHART_CANDLES) or []
+    if history:
+        dash.ohlc = history[-1]
+        dash.candle_ts = history[-1]["time"]
+    next_close_epoch = seconds_until_next_close_epoch(tf_seconds) + 2
 
     try:
-        with Live(dash.render(), console=console, refresh_per_second=10, screen=False) as live:
+        with Live(dash.render(), console=console, refresh_per_second=4, screen=False) as live:
+            dash.status_line = "[green]Live - polling position/price every <1s[/green]"
             while True:
-                wait_s, next_close = seconds_until_next_close(tf_seconds)
-                wait_with_countdown(live, dash, wait_s + 2,
-                                     f"Next {tf_key} candle closes at {next_close.strftime('%H:%M:%S')}",
-                                     tick_poller=lambda: get_live_tick(mt5, symbol),
-                                     candle_updater=lambda: get_forming_candle(mt5, symbol, tf_key))
-                history = get_live_closed_candles(mt5, symbol, tf_key, n_closed=CHART_CANDLES)
-                if not history or len(history) < 2:
-                    dash.add_event("[yellow]Not enough candle data, skipping[/yellow]")
-                    live.update(dash.render())
-                    continue
-                active_trade = handle_candle_close(live, dash, symbol, history, history[-1]["time"],
-                                                    active_trade, point_size,
-                                                    mt5_instance=mt5, lot=lot)
+                tick = get_live_tick(mt5, symbol)
+                if tick:
+                    dash.live_tick = tick
+                    if active_trade:
+                        active_trade["current_price"] = tick["bid"] if active_trade["direction"] == "bull" else tick["ask"]
+
+                    forming = {"time": datetime.now(),
+                               "open": history[-1]["close"] if history else tick["bid"],
+                               "high": max(tick["bid"], history[-1]["close"] if history else tick["bid"]),
+                               "low": min(tick["bid"], history[-1]["close"] if history else tick["bid"]),
+                               "close": tick["bid"]}
+                    dash.chart_candles = (history[-(CHART_CANDLES - 1):] if history else []) + [forming]
+                    dash.forming_present = True
+                    # BUGFIX: OHLC used to only update once per full candle
+                    # close (e.g. every 60s on M1), so it looked frozen
+                    # between closes even though the live price ticked.
+                    # Now it tracks the forming candle live, every tick.
+                    dash.ohlc = forming
+                    dash.candle_ts = "live (forming)"
+
+                # poll the REAL position every tick - this is the fix for
+                # "can't find the trade after TP/SL hits"
+                if active_trade:
+                    result = check_position_status(mt5, active_trade)
+                    if result:
+                        outcome = result["outcome"]
+                        status = "TP_HIT" if outcome == "tp" else "SL_HIT"
+                        active_trade["status"] = status
+                        active_trade["current_price"] = result["exit_price"]
+                        active_trade["tp_status"] = "hit" if outcome == "tp" else "Canceled by SL"
+                        active_trade["sl_status"] = "hit" if outcome == "sl" else "Canceled by TP"
+
+                        update_signal_json_status(active_trade["entry_time"], active_trade["tp_status"],
+                                                   active_trade["sl_status"], status,
+                                                   exit_price=result["exit_price"], profit=result["profit"])
+                        png_path = export_trade_result_chart(active_trade, history)
+
+                        label = "TP HIT" if outcome == "tp" else "SL HIT"
+                        dash.add_event(f"[bold]{label}[/bold] {symbol} {active_trade['direction']} "
+                                        f"@ {result['exit_price']:.5f}  profit={result['profit']:.2f} -> {png_path}")
+                        active_trade = None
+                    elif tick:
+                        # SAFETY NET: MT5 still shows this position open,
+                        # but if the live price has already blown past
+                        # BOTH the intended TP and SL, the broker's stop
+                        # clearly never fired (e.g. it was silently
+                        # dropped - see mt5_open_position's warning).
+                        # Left alone this position would sit open
+                        # forever and every future signal would keep
+                        # getting skipped as "trade already active" -
+                        # which is exactly what happened. Force-close it.
+                        live_price = tick["bid"] if active_trade["direction"] == "bull" else tick["ask"]
+                        if active_trade["direction"] == "bull":
+                            breached = live_price >= active_trade["tp_price"] or live_price <= active_trade["sl_price"]
+                        else:
+                            breached = live_price <= active_trade["tp_price"] or live_price >= active_trade["sl_price"]
+                        if breached:
+                            close_res = mt5_manually_close_position(
+                                mt5, symbol, active_trade["ticket"], active_trade["direction"], active_trade["lot"])
+                            if "price" in close_res:
+                                dash.add_event(
+                                    f"[bold yellow]Safety-net close[/bold yellow] - broker stop never fired, "
+                                    f"closed manually @ {close_res['price']:.5f}"
+                                )
+                                # next tick's check_position_status will pick up the
+                                # official close reason/price from history and finish
+                                # clearing active_trade normally
+                            else:
+                                dash.add_event(f"[bold red]Safety-net close FAILED: {close_res['error']}[/bold red]")
+
+                if time.time() >= next_close_epoch:
+                    new_history = get_live_closed_candles(mt5, symbol, tf_key, n_closed=CHART_CANDLES)
+                    if new_history and len(new_history) >= 2:
+                        prev, curr = new_history[-2], new_history[-1]
+                        history = new_history
+                        dash.ohlc = curr
+                        dash.candle_ts = curr["time"]
+                        dash.chart_candles = history[-CHART_CANDLES:]
+                        dash.forming_present = False
+
+                        if is_bullish_engulfing(prev, curr, point_size):
+                            result = "bull"
+                        elif is_bearish_engulfing(prev, curr, point_size):
+                            result = "bear"
+                        else:
+                            result = None
+
+                        if result is not None:
+                            if active_trade is None:
+                                order = mt5_open_position(mt5, symbol, result, lot, point_size)
+                                if "ticket" in order:
+                                    active_trade = {
+                                        "symbol": symbol, "direction": result,
+                                        "entry_price": order["price"], "entry_time": _ts_str(curr["time"]),
+                                        "tp_price": order["tp_price"], "sl_price": order["sl_price"],
+                                        "lot": order["lot"], "ticket": order["ticket"],
+                                        "point_size": point_size, "status": "open",
+                                        "current_price": order["price"],
+                                    }
+                                    save_signal_json(symbol, result, prev, curr, curr["time"], active_trade)
+                                    export_chart_png(symbol, result, history, curr["time"])
+                                    dash.trades.append(active_trade)
+                                    label = "LONG" if result == "bull" else "SHORT"
+                                    dash.add_event(f"[green]Order filled[/green] {label} ticket={order['ticket']} "
+                                                    f"@ {order['price']:.5f} TP {order['tp_price']:.5f} SL {order['sl_price']:.5f}")
+                                    if order.get("warning"):
+                                        dash.add_event(f"[bold red]WARNING: {order['warning']}[/bold red]")
+                                else:
+                                    dash.add_event(f"[red]Order failed: {order['error']}[/red]")
+                            else:
+                                dash.add_event(f"{'Bullish' if result == 'bull' else 'Bearish'} pattern seen - "
+                                                f"not followed (position already open)")
+                    next_close_epoch = seconds_until_next_close_epoch(tf_seconds) + 2
+
+                live.update(dash.render())
+                time.sleep(TICK_INTERVAL)
     except KeyboardInterrupt:
         console.print("\n[bold]Stopped by user.[/bold]")
     finally:
-        mt5.shutdown()
+        close_live(mt5)
 
 
 def run_simulate():
+    """Paper trading only - never touches a real account."""
     symbol = Prompt.ask("Symbol (simulated)", default="XAUUSD").strip().upper()
     tf_key = Prompt.ask("Timeframe label (cosmetic only)", choices=list(TIMEFRAMES.keys()), default="M1")
     interval = IntPrompt.ask("Seconds between simulated candles (e.g. 3 for a fast demo)", default=3)
@@ -882,23 +942,97 @@ def run_simulate():
     dash = Dashboard(symbol, tf_key, point_size)
     active_trade = None
 
+    def check_paper_trade(trade, candle):
+        if trade["direction"] == "bull":
+            hit_tp = candle["high"] >= trade["tp_price"]
+            hit_sl = candle["low"] <= trade["sl_price"]
+        else:
+            hit_tp = candle["low"] <= trade["tp_price"]
+            hit_sl = candle["high"] >= trade["sl_price"]
+        if hit_tp and hit_sl:
+            return "sl"  # ambiguous within one bar - conservative
+        if hit_tp:
+            return "tp"
+        if hit_sl:
+            return "sl"
+        return None
+
     try:
         with Live(dash.render(), console=console, refresh_per_second=4, screen=False) as live:
+            dash.status_line = "[cyan]Simulating (paper trades only)[/cyan]"
             while True:
-                wait_with_countdown(live, dash, interval, "Generating next simulated candle")
-                sim.next_candle()
+                dash.status_line = f"[yellow]Generating next simulated candle[/yellow]"
+                live.update(dash.render())
+                time.sleep(interval)
+
+                candle = sim.next_candle()
                 history = sim.last_n(CHART_CANDLES)
                 if not history or len(history) < 2:
                     continue
-                ts = history[-1]["time"].strftime("%H:%M:%S")
-                active_trade = handle_candle_close(live, dash, symbol, history, ts, active_trade, point_size)
+                prev, curr = history[-2], history[-1]
+                ts = curr["time"].strftime("%H:%M:%S")
+                dash.ohlc = curr
+                dash.candle_ts = ts
+                dash.chart_candles = history[-CHART_CANDLES:]
+                dash.forming_present = False
+
+                if active_trade:
+                    active_trade["current_price"] = curr["close"]
+                    outcome = check_paper_trade(active_trade, curr)
+                    if outcome:
+                        exit_price = active_trade["tp_price"] if outcome == "tp" else active_trade["sl_price"]
+                        status = "TP_HIT" if outcome == "tp" else "SL_HIT"
+                        active_trade["status"] = status
+                        active_trade["current_price"] = exit_price
+                        update_signal_json_status(active_trade["entry_time"],
+                                                   "hit" if outcome == "tp" else "Canceled by SL",
+                                                   "hit" if outcome == "sl" else "Canceled by TP", status)
+                        png_path = export_trade_result_chart(active_trade, history)
+                        label = "TP HIT" if outcome == "tp" else "SL HIT"
+                        dash.add_event(f"[bold]{label}[/bold] {active_trade['direction']} @ {exit_price:.3f} -> {png_path}")
+                        active_trade = None
+
+                if is_bullish_engulfing(prev, curr, point_size):
+                    result = "bull"
+                elif is_bearish_engulfing(prev, curr, point_size):
+                    result = "bear"
+                else:
+                    result = None
+
+                if result is not None:
+                    if active_trade is None:
+                        entry_price = curr["close"]
+                        if result == "bull":
+                            tp_price = entry_price + TP_POINTS * point_size
+                            sl_price = entry_price - SL_POINTS * point_size
+                        else:
+                            tp_price = entry_price - TP_POINTS * point_size
+                            sl_price = entry_price + SL_POINTS * point_size
+                        active_trade = {
+                            "symbol": symbol, "direction": result, "entry_price": entry_price,
+                            "entry_time": ts, "tp_price": tp_price, "sl_price": sl_price,
+                            "lot": None, "ticket": None, "point_size": point_size,
+                            "status": "open", "current_price": entry_price,
+                        }
+                        save_signal_json(symbol, result, prev, curr, ts, active_trade)
+                        export_chart_png(symbol, result, history, ts)
+                        dash.trades.append(active_trade)
+                        label = "LONG" if result == "bull" else "SHORT"
+                        dash.add_event(f"New [bold]{label}[/bold] paper trade: entry {entry_price:.3f} "
+                                        f"TP {tp_price:.3f} SL {sl_price:.3f}")
+                    else:
+                        dash.add_event(f"{'Bullish' if result == 'bull' else 'Bearish'} pattern seen - "
+                                        f"not followed (trade already active)")
+
+                live.update(dash.render())
     except KeyboardInterrupt:
         console.print("\n[bold]Simulation stopped by user.[/bold]")
 
 
 def main():
     console.print(Panel.fit(
-        "[bold cyan]Engulfing Candle Watcher[/bold cyan]\nLive MT5 detection or a synthetic candle simulator.",
+        "[bold cyan]Engulfing Candle Watcher[/bold cyan]\n"
+        "Live mode places REAL MT5 orders. Simulate mode is paper trading only.",
         border_style="cyan",
     ))
     mode = Prompt.ask("Mode", choices=["live", "simulate"], default="simulate")
