@@ -5,7 +5,8 @@ Engulfing Pattern Watcher (MetaTrader5 + rich) – Live millisecond updates
 - Current (forming) candle drawn in orange/yellow.
 - Engulfing detection when a candle closes.
 - Paper trades with TP/SL, trade log in trades.json.
-- Chart PNG snapshots always use the last 15 candles, with Entry, TP, SL lines.
+- Open snapshots: 15 candles with Entry, TP, SL lines.
+- Close snapshots: only taken on TP hit, last candle = TP candle, Entry & TP lines shown.
 - All data from MT5.
 
 Requirements:
@@ -263,7 +264,7 @@ def classify_engulfing(prev_candle, curr_candle):
 
 
 # ---------------------------------------------------------------------------
-# Chart snapshots – includes Entry, TP, SL lines
+# Chart snapshots – includes Entry, TP, SL lines (SL omitted on TP close)
 # ---------------------------------------------------------------------------
 def save_chart(rates, symbol, trade_id, tag, entry=None, tp=None, sl=None):
     """
@@ -407,22 +408,28 @@ def check_open_trades(trades, symbol, point, tf_const, live_console):
             trade["pnl_points"] = round(pnl_points, 1)
             trade["pnl_percent"] = round(pnl_percent, 3)
 
-            snapshot_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, PNG_CANDLES)
-            if snapshot_rates is not None and len(snapshot_rates) > 0:
-                trade["chart_close"] = save_chart(snapshot_rates, symbol, trade["id"],
-                                                  f"closed_{hit}",
-                                                  entry=trade["entry_price"],
-                                                  tp=trade["tp_price"],
-                                                  sl=trade["sl_price"])
+            # ---------- Snapshot: only for TP hits ----------
+            if hit == "tp":
+                snapshot_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, PNG_CANDLES)
+                if snapshot_rates is not None and len(snapshot_rates) > 0:
+                    # On TP close, we show Entry and TP lines (no SL)
+                    trade["chart_close"] = save_chart(snapshot_rates, symbol, trade["id"],
+                                                      f"closed_{hit}",
+                                                      entry=trade["entry_price"],
+                                                      tp=trade["tp_price"],
+                                                      sl=None)   # <-- omit SL line
+                else:
+                    trade["chart_close"] = None
             else:
-                trade["chart_close"] = None
+                trade["chart_close"] = None   # no snapshot for SL
 
             color = "green" if hit == "tp" else "red"
+            chart_msg = f"Chart saved: {trade['chart_close']}" if trade["chart_close"] else "No chart saved"
             live_console.log(Panel(
                 f"[{color}]{hit.upper()} HIT[/{color}] on trade #{trade['id']} ({symbol})\n"
                 f"Close price: {close_price:.5f}  PNL: {trade['pnl_points']} pts "
                 f"({trade['pnl_percent']}%)\n"
-                f"Chart saved: {trade['chart_close']}",
+                f"{chart_msg}",
                 title=f"Trade #{trade['id']} Closed",
             ))
             changed = True
@@ -504,13 +511,12 @@ def main():
         return
     last_candle_time = live[0]["time"]
 
-    # Variable to hold the last status message (auto‑updating in the live display)
     last_status = "[dim]Waiting for first candle...[/dim]"
 
     # ----- Start millisecond live loop -----
     with Live(console=console, refresh_per_second=1000) as live_display:
         while True:
-            # 1. Fetch current display data (closed + live)
+            # 1. Fetch display data
             rates = fetch_display_rates(symbol, tf_const, CANDLES_TO_SHOW)
             if rates is None:
                 live_display.update(Group(
@@ -523,7 +529,7 @@ def main():
             # 2. Build the chart + orders table + status line
             chart_panel = render_candles_chart(rates, symbol, tf_key)
             orders_rend = render_orders_table(trades, symbol, point)
-            status_text = Text.from_markup(last_status)  # <-- fixed: parse markup
+            status_text = Text.from_markup(last_status)
             live_display.update(Group(chart_panel, orders_rend, status_text))
 
             # 3. Check open trades (TP/SL)
@@ -534,7 +540,6 @@ def main():
             if live_check is not None and len(live_check) > 0:
                 current_candle_time = live_check[0]["time"]
                 if current_candle_time != last_candle_time:
-                    # Candle closed – check engulfing on last two closed bars
                     closed_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, 2)
                     if closed_rates is not None and len(closed_rates) >= 2:
                         prev = {"open": closed_rates[-2]["open"], "close": closed_rates[-2]["close"]}
