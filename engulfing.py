@@ -1,11 +1,12 @@
 """
 Engulfing Pattern Watcher (MetaTrader5 + rich) – Live millisecond updates
 ----------------------------------------------------------------------
-- Live auto‑refreshing candlestick chart + orders table (1000 Hz).
+- Live auto‑refreshing candlestick chart (30 candles) + orders table + status line.
 - Current (forming) candle drawn in orange/yellow.
 - Engulfing detection when a candle closes.
-- Paper trades with TP/SL, trade log in trades.json, chart snapshots.
-- All data (open, high, low, close, time) from MT5.
+- Paper trades with TP/SL, trade log in trades.json.
+- Chart PNG snapshots always use the last 15 candles, with Entry, TP, SL lines.
+- All data from MT5.
 
 Requirements:
     pip install MetaTrader5 rich mplfinance pandas
@@ -43,7 +44,8 @@ CHARTS_DIR = os.path.join(BASE_DIR, "charts")
 
 TP_POINTS = 150
 SL_POINTS = 200
-CANDLES_TO_SHOW = 30          # total candles displayed (including the live one)
+CANDLES_TO_SHOW = 30          # candles displayed in the terminal
+PNG_CANDLES = 15              # candles saved in chart snapshots
 
 TIMEFRAMES = {
     "M1": (mt5.TIMEFRAME_M1, 60),
@@ -60,7 +62,7 @@ os.makedirs(CHARTS_DIR, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
-# .env loading (unchanged)
+# .env loading
 # ---------------------------------------------------------------------------
 def load_accounts(path=ENV_PATH):
     if not os.path.exists(path):
@@ -133,15 +135,15 @@ def connect(account):
 
 
 # ---------------------------------------------------------------------------
-# OHLC helpers – returns closed candles + live candle
+# OHLC helpers
 # ---------------------------------------------------------------------------
 def fetch_display_rates(symbol, tf_const, total=CANDLES_TO_SHOW):
     """
-    Returns the last (total-1) closed candles and the current forming candle
-    as a list of MT5 rate tuples. The last element is the live bar.
+    Returns the last (total-1) closed candles and the current forming candle.
+    The last element is the live bar.
     """
-    closed = mt5.copy_rates_from_pos(symbol, tf_const, 1, total - 1)   # skip forming candle
-    live = mt5.copy_rates_from_pos(symbol, tf_const, 0, 1)             # forming candle
+    closed = mt5.copy_rates_from_pos(symbol, tf_const, 1, total - 1)
+    live = mt5.copy_rates_from_pos(symbol, tf_const, 0, 1)
     if closed is None or len(closed) == 0:
         return None
     rates = list(closed)
@@ -168,7 +170,7 @@ def render_candles_chart(rates, symbol, timeframe, height=22):
     The last candle is the live (forming) one: orange if bearish, yellow if bullish.
     """
     candles = list(rates[-CANDLES_TO_SHOW:])
-    live_idx = len(candles) - 1   # always treat the last as live
+    live_idx = len(candles) - 1
 
     highs = [c["high"] for c in candles]
     lows = [c["low"] for c in candles]
@@ -221,7 +223,7 @@ def render_candles_chart(rates, symbol, timeframe, height=22):
                 body.append("  ")
         body.append("\n")
 
-    # Time axis – first, middle, last candle times
+    # Time axis
     axis_chars = [" "] * (label_width + len(candles) * 2)
     def place(text, col):
         start = label_width + col * 2
@@ -261,10 +263,35 @@ def classify_engulfing(prev_candle, curr_candle):
 
 
 # ---------------------------------------------------------------------------
-# Chart snapshots (mplfinance)
+# Chart snapshots – includes Entry, TP, SL lines
 # ---------------------------------------------------------------------------
-def save_chart(rates, symbol, trade_id, tag):
+def save_chart(rates, symbol, trade_id, tag, entry=None, tp=None, sl=None):
+    """
+    Save a candlestick snapshot with optional trade levels.
+    `entry`, `tp`, `sl` if provided are drawn as horizontal dashed lines.
+    """
     df = rates_to_df(rates)
+    addplots = []
+
+    if entry is not None:
+        addplots.append(
+            mpf.make_addplot(
+                [entry] * len(df), color='blue', linestyle='--', width=1.5, label='Entry'
+            )
+        )
+    if tp is not None:
+        addplots.append(
+            mpf.make_addplot(
+                [tp] * len(df), color='green', linestyle='--', width=1.5, label='TP'
+            )
+        )
+    if sl is not None:
+        addplots.append(
+            mpf.make_addplot(
+                [sl] * len(df), color='red', linestyle='--', width=1.5, label='SL'
+            )
+        )
+
     path = os.path.join(CHARTS_DIR, f"trade_{trade_id}_{tag}.png")
     mpf.plot(
         df,
@@ -272,6 +299,7 @@ def save_chart(rates, symbol, trade_id, tag):
         style="charles",
         title=f"{symbol} - trade #{trade_id} ({tag})",
         volume=False,
+        addplot=addplots if addplots else None,
         savefig=dict(fname=path, dpi=120, bbox_inches="tight"),
     )
     return path
@@ -292,7 +320,7 @@ def save_trades(trades):
         json.dump(trades, f, indent=2)
 
 
-def open_trade(trades, direction, entry_price, point, symbol, timeframe, rates, live_console):
+def open_trade(trades, direction, entry_price, point, symbol, tf_const, live_console):
     trade_id = (trades[-1]["id"] + 1) if trades else 1
 
     if direction == "bullish":
@@ -302,12 +330,17 @@ def open_trade(trades, direction, entry_price, point, symbol, timeframe, rates, 
         tp_price = entry_price - TP_POINTS * point
         sl_price = entry_price + SL_POINTS * point
 
-    chart_path = save_chart(rates, symbol, trade_id, "open")
+    snapshot_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, PNG_CANDLES)
+    if snapshot_rates is not None and len(snapshot_rates) > 0:
+        chart_path = save_chart(snapshot_rates, symbol, trade_id, "open",
+                                entry=entry_price, tp=tp_price, sl=sl_price)
+    else:
+        chart_path = None
 
     trade = {
         "id": trade_id,
         "symbol": symbol,
-        "timeframe": timeframe,
+        "timeframe": None,
         "direction": "buy" if direction == "bullish" else "sell",
         "entry_price": entry_price,
         "entry_time": datetime.now().isoformat(timespec="seconds"),
@@ -329,7 +362,7 @@ def open_trade(trades, direction, entry_price, point, symbol, timeframe, rates, 
 
     color = "green" if direction == "bullish" else "red"
     live_console.log(Panel(
-        f"[{color}]{trade['direction'].upper()} signal[/{color}] on {symbol} ({timeframe})\n"
+        f"[{color}]{trade['direction'].upper()} signal[/{color}] on {symbol}\n"
         f"Entry: {entry_price:.5f}  TP: {tp_price:.5f}  SL: {sl_price:.5f}\n"
         f"Chart saved: {chart_path}",
         title=f"New Trade #{trade_id}",
@@ -374,10 +407,15 @@ def check_open_trades(trades, symbol, point, tf_const, live_console):
             trade["pnl_points"] = round(pnl_points, 1)
             trade["pnl_percent"] = round(pnl_percent, 3)
 
-            # Save a snapshot of the moment of close (closed candles only)
-            rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, CANDLES_TO_SHOW)
-            if rates is not None:
-                trade["chart_close"] = save_chart(rates, symbol, trade["id"], f"closed_{hit}")
+            snapshot_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, PNG_CANDLES)
+            if snapshot_rates is not None and len(snapshot_rates) > 0:
+                trade["chart_close"] = save_chart(snapshot_rates, symbol, trade["id"],
+                                                  f"closed_{hit}",
+                                                  entry=trade["entry_price"],
+                                                  tp=trade["tp_price"],
+                                                  sl=trade["sl_price"])
+            else:
+                trade["chart_close"] = None
 
             color = "green" if hit == "tp" else "red"
             live_console.log(Panel(
@@ -427,7 +465,7 @@ def render_orders_table(trades, symbol, point):
 
 
 # ---------------------------------------------------------------------------
-# Main – live display with millisecond updates
+# Main – live display with status line
 # ---------------------------------------------------------------------------
 def main():
     accounts = load_accounts()
@@ -458,7 +496,7 @@ def main():
     ))
     console.print("[dim]Press Ctrl+C to stop.[/dim]\n")
 
-    # Initial live candle time for close detection
+    # Initial live candle time
     live = mt5.copy_rates_from_pos(symbol, tf_const, 0, 1)
     if live is None or len(live) == 0:
         console.print("[red]Could not fetch initial live candle.[/red]")
@@ -466,22 +504,29 @@ def main():
         return
     last_candle_time = live[0]["time"]
 
+    # Variable to hold the last status message (auto‑updating in the live display)
+    last_status = "[dim]Waiting for first candle...[/dim]"
+
     # ----- Start millisecond live loop -----
     with Live(console=console, refresh_per_second=1000) as live_display:
         while True:
             # 1. Fetch current display data (closed + live)
             rates = fetch_display_rates(symbol, tf_const, CANDLES_TO_SHOW)
             if rates is None:
-                live_display.update(Text("Waiting for data...", style="yellow"))
+                live_display.update(Group(
+                    Text("Waiting for data...", style="yellow"),
+                    Text(last_status)
+                ))
                 time.sleep(0.01)
                 continue
 
-            # 2. Build the chart + orders table
+            # 2. Build the chart + orders table + status line
             chart_panel = render_candles_chart(rates, symbol, tf_key)
             orders_rend = render_orders_table(trades, symbol, point)
-            live_display.update(Group(chart_panel, orders_rend))
+            status_text = Text(last_status)
+            live_display.update(Group(chart_panel, orders_rend, status_text))
 
-            # 3. Check open trades (TP/SL) every tick
+            # 3. Check open trades (TP/SL)
             check_open_trades(trades, symbol, point, tf_const, live_display.console)
 
             # 4. Detect candle close
@@ -489,24 +534,23 @@ def main():
             if live_check is not None and len(live_check) > 0:
                 current_candle_time = live_check[0]["time"]
                 if current_candle_time != last_candle_time:
-                    # A new candle started → previous one just closed
+                    # Candle closed – check engulfing on last two closed bars
                     closed_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, 2)
                     if closed_rates is not None and len(closed_rates) >= 2:
                         prev = {"open": closed_rates[-2]["open"], "close": closed_rates[-2]["close"]}
                         curr = {"open": closed_rates[-1]["open"], "close": closed_rates[-1]["close"]}
                         result = classify_engulfing(prev, curr)
+                        now_str = datetime.now().strftime('%H:%M:%S')
                         if result:
                             entry_price = float(closed_rates[-1]["close"])
-                            open_trade(trades, result, entry_price, point, symbol, tf_key,
-                                       closed_rates, live_display.console)
+                            open_trade(trades, result, entry_price, point, symbol, tf_const,
+                                       live_display.console)
+                            last_status = f"[green]Last signal: {result.upper()} at {now_str}[/green]"
                         else:
-                            live_display.console.log(
-                                f"[dim]No engulfing at {datetime.now().strftime('%H:%M:%S')}.[/dim]"
-                            )
+                            last_status = f"[dim]No engulfing at {now_str}[/dim]"
                     last_candle_time = current_candle_time
 
-            # 5. Loop at ~1 ms (0.001 s) for near‑real‑time updates
-            time.sleep(0.001)
+            time.sleep(0.001)   # 1 ms loop
 
 
 if __name__ == "__main__":
