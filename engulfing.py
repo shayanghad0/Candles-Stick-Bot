@@ -1,43 +1,49 @@
 """
-Engulfing Pattern Watcher (MetaTrader5)
-----------------------------------------
-- Loads MT5 accounts from accounts.env (kept next to this script, not
-  hard-coded in the code) and lets the user pick which account to use.
-- Asks the user for a symbol and timeframe.
-- Waits until the START of the NEXT candle on the chosen timeframe
-  (e.g. if it's 15:45:14 and timeframe = M1, it waits until 15:46:00),
-  then waits a tiny bit more so the candle that just closed is fully formed.
-- Pulls the last closed OHLC candles and checks the last CLOSED candle pair
-  for a Bullish or Bearish Engulfing pattern.
-- Prints the result. Loops forever, checking every new candle.
+Engulfing Pattern Watcher (MetaTrader5 + rich) – Live millisecond updates
+----------------------------------------------------------------------
+- Live auto‑refreshing candlestick chart + orders table (1000 Hz).
+- Current (forming) candle drawn in orange/yellow.
+- Engulfing detection when a candle closes.
+- Paper trades with TP/SL, trade log in trades.json, chart snapshots.
+- All data (open, high, low, close, time) from MT5.
 
 Requirements:
-    pip install MetaTrader5
+    pip install MetaTrader5 rich mplfinance pandas
 
-Files expected in the same folder:
-    accounts.env   -> your account blocks (see format below)
-
-accounts.env format (blocks separated by a line of "="):
-    Name     : Shayan
-    Type     : demo.ecn.mt5 (USD)
-    Server   : Alpari-MT5-Demo
-    Login    : 53070009
-    Password : @8ZsLhHb
-    Investor : @7UrOhMw
-    Typeacc  : Demo Alpari Server
-
-Run:
-    python engulfing_watcher.py
+Files:
+    .env          – account blocks
+    trades.json   – trade log (auto‑created)
+    charts/       – snapshot images (auto‑created)
 """
 
 import os
 import re
+import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import MetaTrader5 as mt5
+import pandas as pd
+import mplfinance as mpf
 
-ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accounts.env")
+from rich.console import Console, Group
+from rich.table import Table
+from rich.panel import Panel
+from rich.text import Text
+from rich.live import Live
+from rich import box
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.path.join(BASE_DIR, ".env")
+TRADES_JSON = os.path.join(BASE_DIR, "trades.json")
+CHARTS_DIR = os.path.join(BASE_DIR, "charts")
+
+TP_POINTS = 150
+SL_POINTS = 200
+CANDLES_TO_SHOW = 30          # total candles displayed (including the live one)
 
 TIMEFRAMES = {
     "M1": (mt5.TIMEFRAME_M1, 60),
@@ -49,42 +55,30 @@ TIMEFRAMES = {
     "D1": (mt5.TIMEFRAME_D1, 86400),
 }
 
+console = Console()
+os.makedirs(CHARTS_DIR, exist_ok=True)
+
 
 # ---------------------------------------------------------------------------
-# accounts.env loading
+# .env loading (unchanged)
 # ---------------------------------------------------------------------------
-
 def load_accounts(path=ENV_PATH):
-    """
-    Parses accounts.env into a list of dicts:
-    [{"name": ..., "type": ..., "server": ..., "login": ..., "password": ...,
-      "investor": ..., "typeacc": ...}, ...]
-    Blocks are separated by a line of '=' characters (any length).
-    Each field line looks like "Key : Value".
-    """
     if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"accounts.env not found at {path}. Create it next to this script."
-        )
-
+        raise FileNotFoundError(f".env not found at {path}. Create it next to this script.")
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
-
     blocks = re.split(r"^=+\s*$", content, flags=re.MULTILINE)
     accounts = []
-
     for block in blocks:
         block = block.strip()
         if not block:
             continue
-
         fields = {}
         for line in block.splitlines():
             if ":" not in line:
                 continue
             key, value = line.split(":", 1)
             fields[key.strip().lower()] = value.strip()
-
         if "login" in fields and "password" in fields and "server" in fields:
             accounts.append({
                 "name": fields.get("name", "Unnamed"),
@@ -95,79 +89,157 @@ def load_accounts(path=ENV_PATH):
                 "investor": fields.get("investor", ""),
                 "typeacc": fields.get("typeacc", ""),
             })
-
     return accounts
 
 
 def choose_account(accounts):
-    print("=== Available Accounts ===")
+    table = Table(title="Available Accounts")
+    table.add_column("#", justify="right")
+    table.add_column("Name")
+    table.add_column("Type")
+    table.add_column("Server")
+    table.add_column("Login")
     for i, acc in enumerate(accounts, start=1):
-        print(f"{i}. {acc['name']} | {acc['typeacc'] or acc['type']} | "
-              f"Server: {acc['server']} | Login: {acc['login']}")
-    print()
-
+        table.add_row(str(i), acc["name"], acc["typeacc"] or acc["type"], acc["server"], acc["login"])
+    console.print(table)
     while True:
-        choice = input(f"Select account [1-{len(accounts)}]: ").strip()
+        choice = console.input(f"Select account [1-{len(accounts)}]: ").strip()
         if choice.isdigit() and 1 <= int(choice) <= len(accounts):
             return accounts[int(choice) - 1]
-        print("Invalid choice, try again.")
+        console.print("[red]Invalid choice, try again.[/red]")
 
 
 def get_symbol_and_timeframe():
-    symbol = input("Symbol (e.g. EURUSD): ").strip().upper()
-
-    print("Available timeframes:", ", ".join(TIMEFRAMES.keys()))
-    tf_input = input("Timeframe [default M1]: ").strip().upper() or "M1"
+    symbol = console.input("Symbol (e.g. EURUSD): ").strip().upper()
+    console.print("Available timeframes: " + ", ".join(TIMEFRAMES.keys()))
+    tf_input = console.input("Timeframe [default M1]: ").strip().upper() or "M1"
     if tf_input not in TIMEFRAMES:
-        print(f"Unknown timeframe '{tf_input}', defaulting to M1.")
+        console.print(f"[yellow]Unknown timeframe '{tf_input}', defaulting to M1.[/yellow]")
         tf_input = "M1"
-
     return symbol, tf_input
 
 
 # ---------------------------------------------------------------------------
 # MT5 connection
 # ---------------------------------------------------------------------------
-
 def connect(account):
     if not mt5.initialize():
         raise RuntimeError(f"initialize() failed, error code = {mt5.last_error()}")
-
-    authorized = mt5.login(
-        int(account["login"]),
-        password=account["password"],
-        server=account["server"],
-    )
+    authorized = mt5.login(int(account["login"]), password=account["password"], server=account["server"])
     if not authorized:
         mt5.shutdown()
         raise RuntimeError(f"login() failed, error code = {mt5.last_error()}")
-
-    print(f"Connected as {account['name']} ({account['login']}) on {account['server']}.")
+    console.print(f"[green]Connected[/green] as {account['name']} ({account['login']}) on {account['server']}.")
 
 
 # ---------------------------------------------------------------------------
-# Timing helpers
+# OHLC helpers – returns closed candles + live candle
 # ---------------------------------------------------------------------------
-
-def seconds_to_next_candle_close(period_seconds: int) -> float:
+def fetch_display_rates(symbol, tf_const, total=CANDLES_TO_SHOW):
     """
-    Returns how many seconds to wait until the NEXT candle boundary
-    (the moment the current candle closes / the next one opens),
-    plus a small buffer so the broker has time to finalize the bar.
-    e.g. now=15:45:14, period=60s (M1) -> waits until 15:46:00 (+buffer).
+    Returns the last (total-1) closed candles and the current forming candle
+    as a list of MT5 rate tuples. The last element is the live bar.
     """
-    now = datetime.now()
-    epoch_seconds = now.timestamp()
-    remainder = epoch_seconds % period_seconds
-    wait = period_seconds - remainder
-    buffer_seconds = 1.5
-    return wait + buffer_seconds
+    closed = mt5.copy_rates_from_pos(symbol, tf_const, 1, total - 1)   # skip forming candle
+    live = mt5.copy_rates_from_pos(symbol, tf_const, 0, 1)             # forming candle
+    if closed is None or len(closed) == 0:
+        return None
+    rates = list(closed)
+    if live is not None and len(live) > 0:
+        rates.append(live[0])
+    return rates
+
+
+def rates_to_df(rates):
+    df = pd.DataFrame(rates)
+    df["time"] = pd.to_datetime(df["time"], unit="s")
+    df.set_index("time", inplace=True)
+    df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close",
+                        "tick_volume": "Volume"}, inplace=True)
+    return df[["Open", "High", "Low", "Close", "Volume"]]
 
 
 # ---------------------------------------------------------------------------
-# Engulfing detection
+# Terminal chart rendering – live candle uses orange/yellow
 # ---------------------------------------------------------------------------
+def render_candles_chart(rates, symbol, timeframe, height=22):
+    """
+    Draws an auto‑scaled candlestick chart in the terminal.
+    The last candle is the live (forming) one: orange if bearish, yellow if bullish.
+    """
+    candles = list(rates[-CANDLES_TO_SHOW:])
+    live_idx = len(candles) - 1   # always treat the last as live
 
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
+    price_max = max(highs)
+    price_min = min(lows)
+    price_range = (price_max - price_min) or (price_max * 0.0001 or 1.0)
+
+    def to_row(price):
+        ratio = (price_max - price) / price_range
+        row = int(round(ratio * (height - 1)))
+        return max(0, min(height - 1, row))
+
+    plotted = []
+    for i, c in enumerate(candles):
+        o, h, l, cl = c["open"], c["high"], c["low"], c["close"]
+        open_row, close_row = to_row(o), to_row(cl)
+        plotted.append({
+            "body_top": min(open_row, close_row),
+            "body_bottom": max(open_row, close_row),
+            "wick_top": to_row(h),
+            "wick_bottom": to_row(l),
+            "bullish": cl >= o,
+            "live": (i == live_idx),
+        })
+
+    label_width = 11
+    body = Text()
+
+    for r in range(height):
+        if r == 0 or r == height - 1 or r % 5 == 0:
+            price_at_row = price_max - (r / (height - 1)) * price_range
+            label = f"{price_at_row:.5f}".rjust(label_width - 1) + " "
+        else:
+            label = " " * label_width
+        body.append(label, style="dim")
+
+        for cd in plotted:
+            if cd["live"]:
+                body_color = "yellow" if cd["bullish"] else "orange"
+                wick_color = f"dim {body_color}"
+            else:
+                body_color = "green" if cd["bullish"] else "red"
+                wick_color = f"dim {body_color}"
+
+            if cd["body_top"] <= r <= cd["body_bottom"]:
+                body.append("█ ", style=body_color)
+            elif cd["wick_top"] <= r <= cd["wick_bottom"]:
+                body.append("│ ", style=wick_color)
+            else:
+                body.append("  ")
+        body.append("\n")
+
+    # Time axis – first, middle, last candle times
+    axis_chars = [" "] * (label_width + len(candles) * 2)
+    def place(text, col):
+        start = label_width + col * 2
+        for i, ch in enumerate(text):
+            if 0 <= start + i < len(axis_chars):
+                axis_chars[start + i] = ch
+
+    place(datetime.fromtimestamp(candles[0]["time"]).strftime("%H:%M"), 0)
+    place(datetime.fromtimestamp(candles[len(candles)//2]["time"]).strftime("%H:%M"), len(candles)//2)
+    place(datetime.fromtimestamp(candles[-1]["time"]).strftime("%H:%M"), len(candles)-3)
+    body.append("".join(axis_chars), style="dim")
+
+    return Panel(body, title=f"{symbol} [{timeframe}] - last {len(candles)} candles")
+
+
+# ---------------------------------------------------------------------------
+# Engulfing classification
+# ---------------------------------------------------------------------------
 def classify_engulfing(prev_candle, curr_candle):
     prev_open, prev_close = prev_candle["open"], prev_candle["close"]
     curr_open, curr_close = curr_candle["open"], curr_candle["close"]
@@ -177,10 +249,9 @@ def classify_engulfing(prev_candle, curr_candle):
     curr_bullish = curr_close > curr_open
     curr_bearish = curr_close < curr_open
 
-    prev_body_low, prev_body_high = sorted([prev_open, prev_close])
-    curr_body_low, curr_body_high = sorted([curr_open, curr_close])
-
-    engulfs = curr_body_low <= prev_body_low and curr_body_high >= prev_body_high
+    prev_lo, prev_hi = sorted([prev_open, prev_close])
+    curr_lo, curr_hi = sorted([curr_open, curr_close])
+    engulfs = curr_lo <= prev_lo and curr_hi >= prev_hi
 
     if prev_bearish and curr_bullish and engulfs:
         return "bullish"
@@ -189,42 +260,179 @@ def classify_engulfing(prev_candle, curr_candle):
     return None
 
 
-def fetch_last_closed_candles(symbol, tf_const, count=2):
-    """pos=1 skips the currently-forming candle, so we only look at closed bars."""
-    rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, count)
-    if rates is None or len(rates) < 2:
-        return None
-    return rates
+# ---------------------------------------------------------------------------
+# Chart snapshots (mplfinance)
+# ---------------------------------------------------------------------------
+def save_chart(rates, symbol, trade_id, tag):
+    df = rates_to_df(rates)
+    path = os.path.join(CHARTS_DIR, f"trade_{trade_id}_{tag}.png")
+    mpf.plot(
+        df,
+        type="candle",
+        style="charles",
+        title=f"{symbol} - trade #{trade_id} ({tag})",
+        volume=False,
+        savefig=dict(fname=path, dpi=120, bbox_inches="tight"),
+    )
+    return path
 
 
-def check_pattern(symbol, tf_const):
-    rates = fetch_last_closed_candles(symbol, tf_const, count=2)
-    if rates is None:
-        print("Could not fetch OHLC data.")
+# ---------------------------------------------------------------------------
+# Trades / JSON log
+# ---------------------------------------------------------------------------
+def load_trades():
+    if not os.path.exists(TRADES_JSON):
+        return []
+    with open(TRADES_JSON, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_trades(trades):
+    with open(TRADES_JSON, "w", encoding="utf-8") as f:
+        json.dump(trades, f, indent=2)
+
+
+def open_trade(trades, direction, entry_price, point, symbol, timeframe, rates, live_console):
+    trade_id = (trades[-1]["id"] + 1) if trades else 1
+
+    if direction == "bullish":
+        tp_price = entry_price + TP_POINTS * point
+        sl_price = entry_price - SL_POINTS * point
+    else:
+        tp_price = entry_price - TP_POINTS * point
+        sl_price = entry_price + SL_POINTS * point
+
+    chart_path = save_chart(rates, symbol, trade_id, "open")
+
+    trade = {
+        "id": trade_id,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "direction": "buy" if direction == "bullish" else "sell",
+        "entry_price": entry_price,
+        "entry_time": datetime.now().isoformat(timespec="seconds"),
+        "tp_price": tp_price,
+        "sl_price": sl_price,
+        "tp_points": TP_POINTS,
+        "sl_points": SL_POINTS,
+        "status": "open",
+        "result": None,
+        "close_price": None,
+        "close_time": None,
+        "pnl_points": None,
+        "pnl_percent": None,
+        "chart_open": chart_path,
+        "chart_close": None,
+    }
+    trades.append(trade)
+    save_trades(trades)
+
+    color = "green" if direction == "bullish" else "red"
+    live_console.log(Panel(
+        f"[{color}]{trade['direction'].upper()} signal[/{color}] on {symbol} ({timeframe})\n"
+        f"Entry: {entry_price:.5f}  TP: {tp_price:.5f}  SL: {sl_price:.5f}\n"
+        f"Chart saved: {chart_path}",
+        title=f"New Trade #{trade_id}",
+    ))
+    return trade
+
+
+def check_open_trades(trades, symbol, point, tf_const, live_console):
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
         return
 
-    prev = {"open": rates[0]["open"], "close": rates[0]["close"]}
-    curr = {"open": rates[1]["open"], "close": rates[1]["close"]}
-    curr_time = datetime.fromtimestamp(rates[1]["time"])
+    changed = False
+    for trade in trades:
+        if trade["status"] != "open" or trade["symbol"] != symbol:
+            continue
 
-    result = classify_engulfing(prev, curr)
+        current_price = tick.bid if trade["direction"] == "sell" else tick.ask
+        hit = None
 
-    if result == "bullish":
-        print(f"[{curr_time}] {symbol}: BULLISH ENGULFING detected.")
-    elif result == "bearish":
-        print(f"[{curr_time}] {symbol}: BEARISH ENGULFING detected.")
-    else:
-        print(f"[{curr_time}] {symbol}: no engulfing pattern.")
+        if trade["direction"] == "buy":
+            if current_price >= trade["tp_price"]:
+                hit = "tp"
+            elif current_price <= trade["sl_price"]:
+                hit = "sl"
+        else:
+            if current_price <= trade["tp_price"]:
+                hit = "tp"
+            elif current_price >= trade["sl_price"]:
+                hit = "sl"
+
+        if hit:
+            close_price = trade["tp_price"] if hit == "tp" else trade["sl_price"]
+            direction_sign = 1 if trade["direction"] == "buy" else -1
+            pnl_points = direction_sign * (close_price - trade["entry_price"]) / point
+            pnl_percent = direction_sign * (close_price - trade["entry_price"]) / trade["entry_price"] * 100
+
+            trade["status"] = "closed"
+            trade["result"] = hit
+            trade["close_price"] = close_price
+            trade["close_time"] = datetime.now().isoformat(timespec="seconds")
+            trade["pnl_points"] = round(pnl_points, 1)
+            trade["pnl_percent"] = round(pnl_percent, 3)
+
+            # Save a snapshot of the moment of close (closed candles only)
+            rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, CANDLES_TO_SHOW)
+            if rates is not None:
+                trade["chart_close"] = save_chart(rates, symbol, trade["id"], f"closed_{hit}")
+
+            color = "green" if hit == "tp" else "red"
+            live_console.log(Panel(
+                f"[{color}]{hit.upper()} HIT[/{color}] on trade #{trade['id']} ({symbol})\n"
+                f"Close price: {close_price:.5f}  PNL: {trade['pnl_points']} pts "
+                f"({trade['pnl_percent']}%)\n"
+                f"Chart saved: {trade['chart_close']}",
+                title=f"Trade #{trade['id']} Closed",
+            ))
+            changed = True
+
+    if changed:
+        save_trades(trades)
+
+
+def render_orders_table(trades, symbol, point):
+    open_trades = [t for t in trades if t["status"] == "open" and t["symbol"] == symbol]
+    if not open_trades:
+        return Text("No open orders", style="dim")
+
+    tick = mt5.symbol_info_tick(symbol)
+    table = Table(title="Open Orders", box=box.SIMPLE)
+    table.add_column("#", justify="right")
+    table.add_column("Dir")
+    table.add_column("Entry", justify="right")
+    table.add_column("TP", justify="right")
+    table.add_column("SL", justify="right")
+    table.add_column("PNL (%)", justify="right")
+    table.add_column("PNL (Point)", justify="right")
+
+    for t in open_trades:
+        if tick:
+            current_price = tick.bid if t["direction"] == "sell" else tick.ask
+            sign = 1 if t["direction"] == "buy" else -1
+            pnl_points = sign * (current_price - t["entry_price"]) / point
+            pnl_percent = sign * (current_price - t["entry_price"]) / t["entry_price"] * 100
+        else:
+            pnl_points = pnl_percent = 0.0
+
+        color = "green" if pnl_points >= 0 else "red"
+        table.add_row(
+            str(t["id"]), t["direction"].upper(), f"{t['entry_price']:.5f}",
+            f"{t['tp_price']:.5f}", f"{t['sl_price']:.5f}",
+            f"[{color}]{pnl_percent:.3f}%[/{color}]", f"[{color}]{pnl_points:.1f}[/{color}]",
+        )
+    return table
 
 
 # ---------------------------------------------------------------------------
-# Main loop
+# Main – live display with millisecond updates
 # ---------------------------------------------------------------------------
-
 def main():
     accounts = load_accounts()
     if not accounts:
-        print("No accounts found in accounts.env.")
+        console.print("[red]No accounts found in .env.[/red]")
         return
 
     account = choose_account(accounts)
@@ -234,29 +442,77 @@ def main():
     tf_const, period_seconds = TIMEFRAMES[tf_key]
 
     if not mt5.symbol_select(symbol, True):
-        print(f"Symbol '{symbol}' not found or could not be selected.")
+        console.print(f"[red]Symbol '{symbol}' not found or could not be selected.[/red]")
         mt5.shutdown()
         return
 
-    print(f"Watching {symbol} on {tf_key}. Press Ctrl+C to stop.\n")
+    symbol_info = mt5.symbol_info(symbol)
+    point = symbol_info.point
+    trades = load_trades()
 
-    try:
-        while True:
-            wait_seconds = seconds_to_next_candle_close(period_seconds)
-            next_check = datetime.now() + timedelta(seconds=wait_seconds)
-            print(f"Now: {datetime.now().strftime('%H:%M:%S')} -> "
-                  f"waiting {wait_seconds:.1f}s for next {tf_key} candle "
-                  f"(check at ~{next_check.strftime('%H:%M:%S')})...")
-            time.sleep(wait_seconds)
+    console.print(Panel(
+        f"Watching [bold]{symbol}[/bold] on [bold]{tf_key}[/bold]\n"
+        f"TP: {TP_POINTS} pts  |  SL: {SL_POINTS} pts\n"
+        f"Trade log: {TRADES_JSON}\nCharts: {CHARTS_DIR}",
+        title="Engulfing Watcher (Live)",
+    ))
+    console.print("[dim]Press Ctrl+C to stop.[/dim]\n")
 
-            check_pattern(symbol, tf_const)
-            print()
-
-    except KeyboardInterrupt:
-        print("\nStopped by user.")
-    finally:
+    # Initial live candle time for close detection
+    live = mt5.copy_rates_from_pos(symbol, tf_const, 0, 1)
+    if live is None or len(live) == 0:
+        console.print("[red]Could not fetch initial live candle.[/red]")
         mt5.shutdown()
+        return
+    last_candle_time = live[0]["time"]
+
+    # ----- Start millisecond live loop -----
+    with Live(console=console, refresh_per_second=1000) as live_display:
+        while True:
+            # 1. Fetch current display data (closed + live)
+            rates = fetch_display_rates(symbol, tf_const, CANDLES_TO_SHOW)
+            if rates is None:
+                live_display.update(Text("Waiting for data...", style="yellow"))
+                time.sleep(0.01)
+                continue
+
+            # 2. Build the chart + orders table
+            chart_panel = render_candles_chart(rates, symbol, tf_key)
+            orders_rend = render_orders_table(trades, symbol, point)
+            live_display.update(Group(chart_panel, orders_rend))
+
+            # 3. Check open trades (TP/SL) every tick
+            check_open_trades(trades, symbol, point, tf_const, live_display.console)
+
+            # 4. Detect candle close
+            live_check = mt5.copy_rates_from_pos(symbol, tf_const, 0, 1)
+            if live_check is not None and len(live_check) > 0:
+                current_candle_time = live_check[0]["time"]
+                if current_candle_time != last_candle_time:
+                    # A new candle started → previous one just closed
+                    closed_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, 2)
+                    if closed_rates is not None and len(closed_rates) >= 2:
+                        prev = {"open": closed_rates[-2]["open"], "close": closed_rates[-2]["close"]}
+                        curr = {"open": closed_rates[-1]["open"], "close": closed_rates[-1]["close"]}
+                        result = classify_engulfing(prev, curr)
+                        if result:
+                            entry_price = float(closed_rates[-1]["close"])
+                            open_trade(trades, result, entry_price, point, symbol, tf_key,
+                                       closed_rates, live_display.console)
+                        else:
+                            live_display.console.log(
+                                f"[dim]No engulfing at {datetime.now().strftime('%H:%M:%S')}.[/dim]"
+                            )
+                    last_candle_time = current_candle_time
+
+            # 5. Loop at ~1 ms (0.001 s) for near‑real‑time updates
+            time.sleep(0.001)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopped by user.[/yellow]")
+    finally:
+        mt5.shutdown()
