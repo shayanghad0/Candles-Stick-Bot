@@ -6,7 +6,8 @@ Engulfing Pattern Watcher (MetaTrader5 + rich) – Live millisecond updates
 - Engulfing detection when a candle closes.
 - Paper trades with TP/SL, trade log in trades.json.
 - Open snapshots: 15 candles with Entry, TP, SL lines.
-- Close snapshots: only taken on TP hit, last candle = TP candle, Entry & TP lines shown.
+- Close snapshots: only taken on full TP hit, last candle = TP candle, Entry & TP lines shown.
+- 50% TP notification: logs a message when price reaches half of TP (e.g., 75 pts).
 - All data from MT5.
 
 Requirements:
@@ -357,6 +358,7 @@ def open_trade(trades, direction, entry_price, point, symbol, tf_const, live_con
         "pnl_percent": None,
         "chart_open": chart_path,
         "chart_close": None,
+        "half_tp_notified": False,          # <-- new field for 50% TP alert
     }
     trades.append(trade)
     save_trades(trades)
@@ -382,8 +384,32 @@ def check_open_trades(trades, symbol, point, tf_const, live_console):
             continue
 
         current_price = tick.bid if trade["direction"] == "sell" else tick.ask
-        hit = None
 
+        # --- 50% TP notification ---
+        if not trade.get("half_tp_notified", False):
+            if trade["direction"] == "buy":
+                half_tp_price = trade["entry_price"] + (TP_POINTS / 2) * point
+                if current_price >= half_tp_price:
+                    trade["half_tp_notified"] = True
+                    changed = True
+                    live_console.log(Panel(
+                        f"[bold yellow]50% TP reached[/bold yellow] on trade #{trade['id']} ({trade['symbol']})\n"
+                        f"Level: {half_tp_price:.5f}",
+                        title="Partial TP Alert",
+                    ))
+            else:  # sell
+                half_tp_price = trade["entry_price"] - (TP_POINTS / 2) * point
+                if current_price <= half_tp_price:
+                    trade["half_tp_notified"] = True
+                    changed = True
+                    live_console.log(Panel(
+                        f"[bold yellow]50% TP reached[/bold yellow] on trade #{trade['id']} ({trade['symbol']})\n"
+                        f"Level: {half_tp_price:.5f}",
+                        title="Partial TP Alert",
+                    ))
+
+        # --- Full TP / SL hit ---
+        hit = None
         if trade["direction"] == "buy":
             if current_price >= trade["tp_price"]:
                 hit = "tp"
@@ -408,20 +434,19 @@ def check_open_trades(trades, symbol, point, tf_const, live_console):
             trade["pnl_points"] = round(pnl_points, 1)
             trade["pnl_percent"] = round(pnl_percent, 3)
 
-            # ---------- Snapshot: only for TP hits ----------
+            # Snapshot only on full TP (as requested)
             if hit == "tp":
                 snapshot_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, PNG_CANDLES)
                 if snapshot_rates is not None and len(snapshot_rates) > 0:
-                    # On TP close, we show Entry and TP lines (no SL)
                     trade["chart_close"] = save_chart(snapshot_rates, symbol, trade["id"],
                                                       f"closed_{hit}",
                                                       entry=trade["entry_price"],
                                                       tp=trade["tp_price"],
-                                                      sl=None)   # <-- omit SL line
+                                                      sl=None)
                 else:
                     trade["chart_close"] = None
             else:
-                trade["chart_close"] = None   # no snapshot for SL
+                trade["chart_close"] = None
 
             color = "green" if hit == "tp" else "red"
             chart_msg = f"Chart saved: {trade['chart_close']}" if trade["chart_close"] else "No chart saved"
@@ -532,7 +557,7 @@ def main():
             status_text = Text.from_markup(last_status)
             live_display.update(Group(chart_panel, orders_rend, status_text))
 
-            # 3. Check open trades (TP/SL)
+            # 3. Check open trades (includes 50% TP alerts)
             check_open_trades(trades, symbol, point, tf_const, live_display.console)
 
             # 4. Detect candle close
