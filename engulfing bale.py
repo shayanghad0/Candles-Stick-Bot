@@ -1,19 +1,19 @@
 """
-Engulfing Pattern Watcher (MetaTrader5 + rich) – Live + Bale alerts
-----------------------------------------------------------------------
+Engulfing Pattern Watcher (MetaTrader5 + rich) – Live + Real Trading + Bale
+-----------------------------------------------------------------------------
 - Live candlestick chart (30 candles) + orders table + status line.
-- Engulfing detection at candle close.
-- Paper trades with TP/SL, JSON log, PNG snapshots (15 candles).
-- 50% TP notification (terminal + Bale).
-- Bale integration: sends open/close charts + text to channel, start/stop to admin.
-- All data from MT5.
+- Engulfing detection at candle close -> opens real market order (no TP/SL on broker).
+- Monitors positions manually: closes at TP/SL, alerts at 50% TP.
+- Bale integration: sends open/close charts & SL/TP1/TP2 messages to channel.
+- Start/stop messages to admin.
+- Prompts for lot size.
 
 Requirements:
     pip install MetaTrader5 rich mplfinance pandas requests
 
 Files:
-    .env          – MT5 account blocks
-    api.env       – Bale API tokens & chat IDs (Api, Group, Channel, Admin)
+    .env          – MT5 accounts
+    api.env       – Bale tokens (Api, Group, Channel, Admin)
     trades.json   – trade log
     charts/       – snapshots
 """
@@ -49,8 +49,11 @@ CHARTS_DIR = os.path.join(BASE_DIR, "charts")
 
 TP_POINTS = 150
 SL_POINTS = 200
-CANDLES_TO_SHOW = 30          # terminal display
-PNG_CANDLES = 15              # snapshot size
+CANDLES_TO_SHOW = 30
+PNG_CANDLES = 15
+
+MAGIC = 123456                # magic number for our trades
+DEVIATION = 20                # max deviation in points
 
 TIMEFRAMES = {
     "M1": (mt5.TIMEFRAME_M1, 60),
@@ -66,17 +69,9 @@ console = Console()
 os.makedirs(CHARTS_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Bale API integration
+# Bale Notifier (unchanged)
 # ---------------------------------------------------------------------------
 class BaleNotifier:
-    """
-    Sends messages & photos to Bale messenger.
-    api.env should contain:
-        Api=TOKEN
-        Group=chat_id or Null
-        Channel=chat_id or Null
-        Admin=chat_id or Null
-    """
     def __init__(self, token, admin_id=None, group_id=None, channel_id=None):
         self.token = token
         self.base = f"https://tapi.bale.ai/bot{token}"
@@ -123,15 +118,14 @@ class BaleNotifier:
     def notify_channel_photo(self, photo_path, caption=""):
         self.send_photo(self.channel_id, photo_path, caption)
 
-# Global Bale notifier (set in main)
 bale: BaleNotifier = None
 
 # ---------------------------------------------------------------------------
-# .env loading (MT5 accounts)
+# MT5 account loading (unchanged)
 # ---------------------------------------------------------------------------
 def load_accounts(path=ENV_PATH):
     if not os.path.exists(path):
-        raise FileNotFoundError(f".env not found at {path}. Create it next to this script.")
+        raise FileNotFoundError(f".env not found at {path}.")
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     blocks = re.split(r"^=+\s*$", content, flags=re.MULTILINE)
@@ -182,6 +176,19 @@ def get_symbol_and_timeframe():
         console.print(f"[yellow]Unknown timeframe '{tf_input}', defaulting to M1.[/yellow]")
         tf_input = "M1"
     return symbol, tf_input
+
+def get_lot():
+    while True:
+        lot_str = console.input("Lot size (e.g. 1, 0.1, 0.01): ").strip()
+        try:
+            lot = float(lot_str)
+            if lot <= 0:
+                console.print("[red]Lot must be positive.[/red]")
+                continue
+            # Check min lot allowed by broker
+            return lot
+        except:
+            console.print("[red]Invalid number.[/red]")
 
 # ---------------------------------------------------------------------------
 # MT5 connection
@@ -325,7 +332,69 @@ def save_chart(rates, symbol, trade_id, tag, entry=None, tp=None, sl=None):
     return path
 
 # ---------------------------------------------------------------------------
-# Trade log
+# Real order placement
+# ---------------------------------------------------------------------------
+def place_market_order(symbol, direction, volume, point, live_console):
+    """direction: 'buy' or 'sell'. Returns trade dict or None if failed."""
+    order_type = mt5.ORDER_TYPE_BUY if direction == "buy" else mt5.ORDER_TYPE_SELL
+    tick = mt5.symbol_info_tick(symbol)
+    if not tick:
+        live_console.log("[red]No tick data for order placement.[/red]")
+        return None
+    price = tick.ask if direction == "buy" else tick.bid
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": order_type,
+        "price": price,
+        "deviation": DEVIATION,
+        "magic": MAGIC,
+        "comment": "EngulfingBot",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_FOK,
+    }
+    result = mt5.order_send(request)
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        live_console.log(f"[red]Order failed: retcode={result.retcode}, comment={result.comment}[/red]")
+        return None
+    return result.order
+
+# ---------------------------------------------------------------------------
+# Close a position by ticket
+# ---------------------------------------------------------------------------
+def close_position(symbol, ticket, volume, live_console):
+    tick = mt5.symbol_info_tick(symbol)
+    if not tick:
+        return False
+    pos = mt5.positions_get(ticket=ticket)
+    if not pos:
+        return False
+    pos = pos[0]
+    # determine close direction opposite to position type
+    close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+    price = tick.bid if close_type == mt5.ORDER_TYPE_SELL else tick.ask
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": close_type,
+        "position": ticket,
+        "price": price,
+        "deviation": DEVIATION,
+        "magic": MAGIC,
+        "comment": "CloseByBot",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_FOK,
+    }
+    result = mt5.order_send(request)
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        live_console.log(f"[red]Close failed: retcode={result.retcode}, {result.comment}[/red]")
+        return False
+    return True
+
+# ---------------------------------------------------------------------------
+# Trade log + real order opening
 # ---------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(TRADES_JSON):
@@ -337,29 +406,39 @@ def save_trades(trades):
     with open(TRADES_JSON, "w", encoding="utf-8") as f:
         json.dump(trades, f, indent=2)
 
-def open_trade(trades, direction, entry_price, point, symbol, tf_const, live_console):
+def open_trade(trades, direction, entry_price, point, symbol, tf_const, lot, live_console):
     trade_id = (trades[-1]["id"] + 1) if trades else 1
     if direction == "bullish":
         tp_price = entry_price + TP_POINTS * point
         sl_price = entry_price - SL_POINTS * point
         order_type = "Long"
+        mt5_direction = "buy"
     else:
         tp_price = entry_price - TP_POINTS * point
         sl_price = entry_price + SL_POINTS * point
         order_type = "Short"
+        mt5_direction = "sell"
 
-    # Fetch PNG_CANDLES closed bars for snapshot
+    # Place market order
+    ticket = place_market_order(symbol, mt5_direction, lot, point, live_console)
+    if not ticket:
+        live_console.log("[red]Failed to open real order, skipping trade.[/red]")
+        return
+
+    # Snapshot
     snapshot_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, PNG_CANDLES)
     chart_path = None
     if snapshot_rates is not None and len(snapshot_rates) > 0:
         chart_path = save_chart(snapshot_rates, symbol, trade_id, "open",
                                 entry=entry_price, tp=tp_price, sl=sl_price)
 
+    tp1_price = entry_price + (TP_POINTS/2)*point if direction == "bullish" else entry_price - (TP_POINTS/2)*point
+
     trade = {
         "id": trade_id,
         "symbol": symbol,
         "timeframe": None,
-        "direction": "buy" if direction == "bullish" else "sell",
+        "direction": mt5_direction,
         "entry_price": entry_price,
         "entry_time": datetime.now().isoformat(timespec="seconds"),
         "tp_price": tp_price,
@@ -375,37 +454,39 @@ def open_trade(trades, direction, entry_price, point, symbol, tf_const, live_con
         "chart_open": chart_path,
         "chart_close": None,
         "half_tp_notified": False,
-        "tp1_price": entry_price + (TP_POINTS/2)*point if direction == "bullish" else entry_price - (TP_POINTS/2)*point,
+        "tp1_price": tp1_price,
         "direction_raw": direction,
+        "ticket": ticket,
+        "lot": lot,
     }
     trades.append(trade)
     save_trades(trades)
 
-    # Terminal log
+    # Terminal
     color = "green" if direction == "bullish" else "red"
     live_console.log(Panel(
-        f"[{color}]{order_type} signal[/{color}] on {symbol}\n"
-        f"Entry: {entry_price:.5f}  TP1: {trade['tp1_price']:.5f}  TP2: {tp_price:.5f}  SL: {sl_price:.5f}\n"
-        f"Chart saved: {chart_path}",
+        f"[{color}]{order_type} signal[/{color}] on {symbol} (Ticket: {ticket})\n"
+        f"Entry: {entry_price:.5f}  TP1: {tp1_price:.5f}  TP2: {tp_price:.5f}  SL: {sl_price:.5f}",
         title=f"New Trade #{trade_id}",
     ))
 
-    # Bale notification: send open chart to channel
+    # Bale: send open chart to channel
     if bale and bale.channel_id and chart_path:
         caption = (
             f"order id on json db : {trade_id}\n"
             f"symbol : {symbol}\n"
             f"Type Order : {order_type}\n"
             f"Entry price : {entry_price:.5f}\n"
-            f"TP 1 : {trade['tp1_price']:.5f} => 75 point\n"
+            f"TP 1 : {tp1_price:.5f} => 75 point\n"
             f"Full TP (TP 2) : {tp_price:.5f} => 150 point\n"
             f"StopLess : {sl_price:.5f}"
         )
         bale.notify_channel_photo(chart_path, caption)
 
-    return trade
-
-def check_open_trades(trades, symbol, point, tf_const, live_console):
+# ---------------------------------------------------------------------------
+# Monitor real positions
+# ---------------------------------------------------------------------------
+def monitor_positions(trades, symbol, point, tf_const, live_console):
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         return
@@ -415,60 +496,64 @@ def check_open_trades(trades, symbol, point, tf_const, live_console):
         if trade["status"] != "open" or trade["symbol"] != symbol:
             continue
 
-        current_price = tick.bid if trade["direction"] == "sell" else tick.ask
+        # Ensure position still exists
+        pos_list = mt5.positions_get(ticket=trade["ticket"])
+        if not pos_list:
+            # Position vanished (maybe closed externally), mark as closed
+            trade["status"] = "closed"
+            trade["result"] = "unknown"
+            trade["close_time"] = datetime.now().isoformat(timespec="seconds")
+            changed = True
+            live_console.log(f"[yellow]Position #{trade['ticket']} missing, marked closed.[/yellow]")
+            continue
 
-        # ---- 50% TP notification ----
-        if not trade.get("half_tp_notified", False):
-            tp1_price = trade.get("tp1_price")
-            if tp1_price is not None:
-                if trade["direction"] == "buy" and current_price >= tp1_price:
-                    trade["half_tp_notified"] = True
-                    changed = True
-                    # compute PNL at this moment
-                    sign = 1 if trade["direction"] == "buy" else -1
-                    pnl_points = sign * (current_price - trade["entry_price"]) / point
-                    pnl_percent = sign * (current_price - trade["entry_price"]) / trade["entry_price"] * 100
-                    # Terminal
-                    live_console.log(Panel(
-                        f"[bold yellow]50% TP reached[/bold yellow] on trade #{trade['id']} ({trade['symbol']})\n"
-                        f"Level: {tp1_price:.5f}",
-                        title="Partial TP Alert",
-                    ))
-                    # Bale
-                    if bale and bale.channel_id:
-                        bale.notify_channel(
-                            f"order id on json db : {trade['id']}\n"
-                            f"is hit tp 1 on price TP 1 : {tp1_price:.5f} => 75point\n"
-                            f"PNL per % : {pnl_percent:.2f}%\n"
-                            f"PNL per point : {pnl_points:.1f}"
-                        )
-                elif trade["direction"] == "sell" and current_price <= tp1_price:
-                    trade["half_tp_notified"] = True
-                    changed = True
-                    sign = 1 if trade["direction"] == "buy" else -1
-                    pnl_points = sign * (current_price - trade["entry_price"]) / point
-                    pnl_percent = sign * (current_price - trade["entry_price"]) / trade["entry_price"] * 100
-                    live_console.log(Panel(
-                        f"[bold yellow]50% TP reached[/bold yellow] on trade #{trade['id']} ({trade['symbol']})\n"
-                        f"Level: {tp1_price:.5f}",
-                        title="Partial TP Alert",
-                    ))
-                    if bale and bale.channel_id:
-                        bale.notify_channel(
-                            f"order id on json db : {trade['id']}\n"
-                            f"is hit tp 1 on price TP 1 : {tp1_price:.5f} => 75point\n"
-                            f"PNL per % : {pnl_percent:.2f}%\n"
-                            f"PNL per point : {pnl_points:.1f}"
-                        )
-
-        # ---- Full TP/SL ----
+        pos = pos_list[0]
+        current_price = pos.price_current
+        # Determine hit logic: for buy, TP if price>=TP, SL if price<=SL
+        # For sell, TP if price<=TP, SL if price>=SL
         hit = None
+
+        # 50% TP check
+        if not trade.get("half_tp_notified", False):
+            tp1 = trade.get("tp1_price")
+            if tp1 is not None:
+                if trade["direction"] == "buy" and current_price >= tp1:
+                    trade["half_tp_notified"] = True
+                    changed = True
+                    pnl_p = pos.profit  # in deposit currency
+                    pnl_points = (current_price - trade["entry_price"]) / point if trade["direction"]=="buy" else (trade["entry_price"] - current_price)/point
+                    pnl_percent = (current_price - trade["entry_price"]) / trade["entry_price"] * 100 if trade["direction"]=="buy" else (trade["entry_price"] - current_price) / trade["entry_price"] * 100
+                    live_console.log(Panel(f"[bold yellow]50% TP reached[/bold yellow] on trade #{trade['id']} ({trade['symbol']})",
+                                           title="Partial TP"))
+                    if bale and bale.channel_id:
+                        bale.notify_channel(
+                            f"order id on json db : {trade['id']}\n"
+                            f"is hit tp 1 on price TP 1 : {tp1:.5f} => 75point\n"
+                            f"PNL per % : {pnl_percent:.2f}%\n"
+                            f"PNL per point : {pnl_points:.1f}"
+                        )
+                elif trade["direction"] == "sell" and current_price <= tp1:
+                    trade["half_tp_notified"] = True
+                    changed = True
+                    pnl_points = (trade["entry_price"] - current_price) / point
+                    pnl_percent = (trade["entry_price"] - current_price) / trade["entry_price"] * 100
+                    live_console.log(Panel(f"[bold yellow]50% TP reached[/bold yellow] on trade #{trade['id']} ({trade['symbol']})",
+                                           title="Partial TP"))
+                    if bale and bale.channel_id:
+                        bale.notify_channel(
+                            f"order id on json db : {trade['id']}\n"
+                            f"is hit tp 1 on price TP 1 : {tp1:.5f} => 75point\n"
+                            f"PNL per % : {pnl_percent:.2f}%\n"
+                            f"PNL per point : {pnl_points:.1f}"
+                        )
+
+        # Full TP / SL
         if trade["direction"] == "buy":
             if current_price >= trade["tp_price"]:
                 hit = "tp"
             elif current_price <= trade["sl_price"]:
                 hit = "sl"
-        else:
+        else:  # sell
             if current_price <= trade["tp_price"]:
                 hit = "tp"
             elif current_price >= trade["sl_price"]:
@@ -476,9 +561,15 @@ def check_open_trades(trades, symbol, point, tf_const, live_console):
 
         if hit:
             close_price = trade["tp_price"] if hit == "tp" else trade["sl_price"]
+            # Compute PNL
             direction_sign = 1 if trade["direction"] == "buy" else -1
             pnl_points = direction_sign * (close_price - trade["entry_price"]) / point
             pnl_percent = direction_sign * (close_price - trade["entry_price"]) / trade["entry_price"] * 100
+
+            # Close position
+            if not close_position(symbol, trade["ticket"], trade["lot"], live_console):
+                live_console.log(f"[red]Failed to close ticket {trade['ticket']}, will retry later.[/red]")
+                continue  # try again next cycle
 
             trade["status"] = "closed"
             trade["result"] = hit
@@ -487,7 +578,7 @@ def check_open_trades(trades, symbol, point, tf_const, live_console):
             trade["pnl_points"] = round(pnl_points, 1)
             trade["pnl_percent"] = round(pnl_percent, 3)
 
-            # Snapshot only on full TP
+            # Snapshot only on TP
             if hit == "tp":
                 snapshot_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, PNG_CANDLES)
                 if snapshot_rates is not None and len(snapshot_rates) > 0:
@@ -497,7 +588,7 @@ def check_open_trades(trades, symbol, point, tf_const, live_console):
                                              tp=trade["tp_price"],
                                              sl=None)
                     trade["chart_close"] = chart_close
-                    # Bale: send close photo to channel
+                    # Bale: send TP chart
                     if bale and bale.channel_id:
                         caption = (
                             f"order id on json db : {trade['id']}\n"
@@ -506,11 +597,20 @@ def check_open_trades(trades, symbol, point, tf_const, live_console):
                             f"PNL per point : {pnl_points:.1f}"
                         )
                         bale.notify_channel_photo(chart_close, caption)
-            else:
+            else:  # SL hit
                 trade["chart_close"] = None
+                # Bale: send SL message only
+                if bale and bale.channel_id:
+                    bale.notify_channel(
+                        f"order id on json db : {trade['id']}\n"
+                        f"symbol : {symbol}\n"
+                        f"SL HIT at price : {close_price:.5f}\n"
+                        f"PNL per % : {pnl_percent:.2f}%\n"
+                        f"PNL per point : {pnl_points:.1f}"
+                    )
 
             color = "green" if hit == "tp" else "red"
-            chart_msg = f"Chart saved: {trade['chart_close']}" if trade.get("chart_close") else "No chart saved"
+            chart_msg = f"Chart saved: {trade.get('chart_close')}" if trade.get('chart_close') else "No chart saved"
             live_console.log(Panel(
                 f"[{color}]{hit.upper()} HIT[/{color}] on trade #{trade['id']} ({symbol})\n"
                 f"Close price: {close_price:.5f}  PNL: {trade['pnl_points']} pts "
@@ -523,6 +623,9 @@ def check_open_trades(trades, symbol, point, tf_const, live_console):
     if changed:
         save_trades(trades)
 
+# ---------------------------------------------------------------------------
+# Orders table (shows open trades from JSON)
+# ---------------------------------------------------------------------------
 def render_orders_table(trades, symbol, point):
     open_trades = [t for t in trades if t["status"] == "open" and t["symbol"] == symbol]
     if not open_trades:
@@ -531,12 +634,14 @@ def render_orders_table(trades, symbol, point):
     tick = mt5.symbol_info_tick(symbol)
     table = Table(title="Open Orders", box=box.SIMPLE)
     table.add_column("#", justify="right")
+    table.add_column("Ticket")
     table.add_column("Dir")
     table.add_column("Entry", justify="right")
+    table.add_column("Current", justify="right")
     table.add_column("TP", justify="right")
     table.add_column("SL", justify="right")
     table.add_column("PNL (%)", justify="right")
-    table.add_column("PNL (Point)", justify="right")
+    table.add_column("PNL (pts)", justify="right")
 
     for t in open_trades:
         if tick:
@@ -545,12 +650,12 @@ def render_orders_table(trades, symbol, point):
             pnl_points = sign * (current_price - t["entry_price"]) / point
             pnl_percent = sign * (current_price - t["entry_price"]) / t["entry_price"] * 100
         else:
-            pnl_points = pnl_percent = 0.0
+            current_price = pnl_points = pnl_percent = 0.0
 
         color = "green" if pnl_points >= 0 else "red"
         table.add_row(
-            str(t["id"]), t["direction"].upper(), f"{t['entry_price']:.5f}",
-            f"{t['tp_price']:.5f}", f"{t['sl_price']:.5f}",
+            str(t["id"]), str(t["ticket"]), t["direction"].upper(), f"{t['entry_price']:.5f}",
+            f"{current_price:.5f}", f"{t['tp_price']:.5f}", f"{t['sl_price']:.5f}",
             f"[{color}]{pnl_percent:.3f}%[/{color}]", f"[{color}]{pnl_points:.1f}[/{color}]",
         )
     return table
@@ -571,6 +676,7 @@ def main():
 
     symbol, tf_key = get_symbol_and_timeframe()
     tf_const, period_seconds = TIMEFRAMES[tf_key]
+    lot = get_lot()
 
     if not mt5.symbol_select(symbol, True):
         console.print(f"[red]Symbol '{symbol}' not found.[/red]")
@@ -581,7 +687,7 @@ def main():
     point = symbol_info.point
     trades = load_trades()
 
-    # ----------------- Bale setup -----------------
+    # Bale setup
     bale = None
     if os.path.exists(API_ENV_PATH):
         try:
@@ -600,7 +706,6 @@ def main():
                     group_id=api_conf.get("Group"),
                     channel_id=api_conf.get("Channel")
                 )
-                # Send startup message to Admin
                 start_msg = (
                     "ربات با موفقیت روشن شد\n"
                     f"symbol : {symbol}\n"
@@ -616,9 +721,9 @@ def main():
 
     console.print(Panel(
         f"Watching [bold]{symbol}[/bold] on [bold]{tf_key}[/bold]\n"
-        f"TP: {TP_POINTS} pts  |  SL: {SL_POINTS} pts\n"
+        f"Lot: {lot}  |  TP: {TP_POINTS} pts  |  SL: {SL_POINTS} pts\n"
         f"Trade log: {TRADES_JSON}\nCharts: {CHARTS_DIR}",
-        title="Engulfing Watcher (Live)",
+        title="Engulfing Watcher (Live Trading)",
     ))
     console.print("[dim]Press Ctrl+C to stop.[/dim]\n")
 
@@ -631,7 +736,6 @@ def main():
     last_candle_time = live[0]["time"]
     last_status = "[dim]Waiting for first candle...[/dim]"
 
-    # Main loop wrapped for graceful Bale notification on stop
     try:
         with Live(console=console, refresh_per_second=1000) as live_display:
             while True:
@@ -647,8 +751,10 @@ def main():
                 status_text = Text.from_markup(last_status)
                 live_display.update(Group(chart_panel, orders_rend, status_text))
 
-                check_open_trades(trades, symbol, point, tf_const, live_display.console)
+                # Monitor open positions (TP/SL and close)
+                monitor_positions(trades, symbol, point, tf_const, live_display.console)
 
+                # Candle close detection
                 live_check = mt5.copy_rates_from_pos(symbol, tf_const, 0, 1)
                 if live_check is not None and len(live_check) > 0:
                     current_candle_time = live_check[0]["time"]
@@ -661,8 +767,7 @@ def main():
                             now_str = datetime.now().strftime('%H:%M:%S')
                             if result:
                                 entry_price = float(closed_rates[-1]["close"])
-                                open_trade(trades, result, entry_price, point, symbol, tf_const,
-                                           live_display.console)
+                                open_trade(trades, result, entry_price, point, symbol, tf_const, lot, live_display.console)
                                 last_status = f"[green]Last signal: {result.upper()} at {now_str}[/green]"
                             else:
                                 last_status = f"[dim]No engulfing at {now_str}[/dim]"
