@@ -1,0 +1,43 @@
+Bot Start
+
+ربات با موفقیت روشن شد 
+symbol : 
+Time Start :
+Mode Trade : Engulfing CandleStick
+
+در حال پیدا کردن موقعیت
+
+code find order 
+
+{send picture open order}
+
+order id on json db : {order id on json db}
+symbol
+Type Order : Long | Short 
+Entry pirce : 
+TP 1 : {Price} => 75point
+Full TP (TP 2) : {Price} => 150 point
+StopLess : {Price} 
+
+code hit TP 1 : 
+
+order id on json db : {order id on json db}
+is hit tp 1 on price TP 1 : {Price} => 75point
+PNL per % : 
+PNL per point : 
+
+code hit TP 2 (full tp) :
+
+{send picture close order}
+
+order id on json db : {order id on json db}
+is hit full TP: {Price} => 150point 
+PNL per % : 
+PNL per point : 
+
+
+code stop working
+
+کد متوقف شد 
+دلیل :‌
+{Resion}
