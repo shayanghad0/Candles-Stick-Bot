@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "symbol": "XAUUSD",
+    "timeframe": null,
+    "direction": "sell",
+    "entry_price": 4240.62,
+    "entry_time": "2026-08-06T16:36:50",
+    "tp_price": 4239.12,
+    "sl_price": 4242.62,
+    "tp_points": 150,
+    "sl_points": 200,
+    "status": "closed",
+    "result": "tp",
+    "close_price": 4239.12,
+    "close_time": "2026-08-06T16:36:56",
+    "pnl_points": 150.0,
+    "pnl_percent": 0.035,
+    "chart_open": "C:\\Users\\Shayan\\Desktop\\New folder\\charts\\trade_1_open.png",
+    "chart_close": "C:\\Users\\Shayan\\Desktop\\New folder\\charts\\trade_1_closed_tp.png"
+  }
+]

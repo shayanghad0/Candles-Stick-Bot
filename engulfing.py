@@ -515,7 +515,7 @@ def main():
             if rates is None:
                 live_display.update(Group(
                     Text("Waiting for data...", style="yellow"),
-                    Text(last_status)
+                    Text.from_markup(last_status)
                 ))
                 time.sleep(0.01)
                 continue
@@ -523,7 +523,7 @@ def main():
             # 2. Build the chart + orders table + status line
             chart_panel = render_candles_chart(rates, symbol, tf_key)
             orders_rend = render_orders_table(trades, symbol, point)
-            status_text = Text(last_status)
+            status_text = Text.from_markup(last_status)  # <-- fixed: parse markup
             live_display.update(Group(chart_panel, orders_rend, status_text))
 
             # 3. Check open trades (TP/SL)
