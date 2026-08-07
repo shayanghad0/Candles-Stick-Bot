@@ -48,8 +48,8 @@ API_ENV_PATH = os.path.join(BASE_DIR, "api.env")
 TRADES_JSON = os.path.join(BASE_DIR, "trades.json")
 CHARTS_DIR = os.path.join(BASE_DIR, "charts")
 
-TP_POINTS = 150
-SL_POINTS = 700
+TP_POINTS = 100
+SL_POINTS = 250
 CANDLES_TO_SHOW = 60
 PNG_CANDLES = 30
 
