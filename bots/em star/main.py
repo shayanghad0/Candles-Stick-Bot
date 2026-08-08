@@ -58,6 +58,7 @@ from rich.table import Table
 from rich.prompt import Prompt
 from rich.panel import Panel
 from rich.live import Live
+from rich.text import Text
 from rich import box
 
 console = Console()
@@ -284,6 +285,79 @@ def detect_evening_star(df: pd.DataFrame) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Live ASCII candlestick chart (rich)
+# ---------------------------------------------------------------------------
+def build_live_candles_panel(df: pd.DataFrame, symbol: str, tf_name: str, height: int = 20) -> Panel:
+    """Renders the last N candles as a block-character candlestick chart
+    inside a rich Panel, with a price axis on the left and time labels
+    along the bottom."""
+    highs = df["high"].tolist()
+    lows = df["low"].tolist()
+    opens = df["open"].tolist()
+    closes = df["close"].tolist()
+    times = df["time"].tolist()
+
+    price_max = max(highs)
+    price_min = min(lows)
+    price_range = (price_max - price_min) or (price_max * 0.0001 or 1.0)
+
+    def row_price(row_idx: int) -> float:
+        return price_max - (row_idx / (height - 1)) * price_range
+
+    grid_rows = ["" for _ in range(height)]
+    grid_styles: list[list[str]] = [["" for _ in range(len(df))] for _ in range(height)]
+    label_rows = {0, height // 4, height // 2, (3 * height) // 4, height - 1}
+
+    for col, (o, h, l, c) in enumerate(zip(opens, highs, lows, closes)):
+        body_top, body_bottom = max(o, c), min(o, c)
+        bullish = c >= o
+        style = "bold green" if bullish else "bold red"
+        for row in range(height):
+            p_hi = row_price(row) + (price_range / (height - 1)) / 2
+            p_lo = row_price(row) - (price_range / (height - 1)) / 2
+            if body_top >= p_lo and body_bottom <= p_hi:
+                grid_styles[row][col] = f"█[{style}]"
+            elif h >= p_lo and l <= p_hi:
+                grid_styles[row][col] = f"│[{style}]"
+
+    text = Text()
+    for row in range(height):
+        price_label = ""
+        if row in label_rows:
+            price_label = f"{row_price(row):>12.5f} "
+        else:
+            price_label = " " * 13
+        text.append(price_label, style="dim")
+        for col in range(len(df)):
+            cell = grid_styles[row][col]
+            if cell.startswith("█"):
+                text.append("█ ", style="bold green" if "green" in cell else "bold red")
+            elif cell.startswith("│"):
+                text.append("│ ", style="green" if "green" in cell else "red")
+            else:
+                text.append("  ")
+        text.append("\n")
+
+    # x-axis time labels, spaced out roughly every 6 candles
+    axis = Text(" " * 13, style="dim")
+    step = max(len(df) // 5, 1)
+    last_label_col = -10
+    col_cursor = 0
+    label_line = [" "] * (len(df) * 2)
+    for col in range(0, len(df), step):
+        label = times[col].strftime("%H:%M")
+        pos = col * 2
+        for i, ch in enumerate(label):
+            if pos + i < len(label_line):
+                label_line[pos + i] = ch
+    axis.append("".join(label_line), style="dim")
+    text.append(axis)
+    text.append("\n")
+
+    return Panel(text, title=f"{symbol} [{tf_name}] - last {len(df)} candles", box=box.ROUNDED)
+
+
+# ---------------------------------------------------------------------------
 # Chart saving
 # ---------------------------------------------------------------------------
 def save_chart(df: pd.DataFrame, filename: Path, title: str = "") -> None:
@@ -487,11 +561,7 @@ def main() -> None:
             elif detect_evening_star(df):
                 direction, pattern_name = "sell", "Evening Star"
 
-            last = df.iloc[-1]
-            console.print(
-                f"[dim]{last['time']}  O:{last['open']:.5f} H:{last['high']:.5f} "
-                f"L:{last['low']:.5f} C:{last['close']:.5f}[/dim]"
-            )
+            console.print(build_live_candles_panel(df, symbol, tf_name))
 
             if direction is None:
                 console.print("[dim]No signal on this candle.[/dim]")
