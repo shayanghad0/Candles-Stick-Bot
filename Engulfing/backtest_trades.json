@@ -2,102 +2,6 @@
   {
     "id": 1,
     "symbol": "XAUUSD",
-    "direction": "sell",
-    "entry_price": 4244.33,
-    "entry_time": "2026-08-07T01:21:00",
-    "tp_price": 4242.83,
-    "sl_price": 4246.33,
-    "status": "closed",
-    "result": "tp",
-    "close_price": 4242.83,
-    "close_time": "2026-08-07T01:24:00",
-    "pnl_points": 150.0,
-    "pnl_percent": 0.035,
-    "lot": 0.04
-  },
-  {
-    "id": 2,
-    "symbol": "XAUUSD",
-    "direction": "sell",
-    "entry_price": 4241.6,
-    "entry_time": "2026-08-07T01:24:00",
-    "tp_price": 4240.1,
-    "sl_price": 4243.6,
-    "status": "closed",
-    "result": "sl",
-    "close_price": 4243.6,
-    "close_time": "2026-08-07T01:29:00",
-    "pnl_points": -200.0,
-    "pnl_percent": -0.047,
-    "lot": 0.04
-  },
-  {
-    "id": 3,
-    "symbol": "XAUUSD",
-    "direction": "buy",
-    "entry_price": 4245.69,
-    "entry_time": "2026-08-07T01:31:00",
-    "tp_price": 4247.19,
-    "sl_price": 4243.69,
-    "status": "closed",
-    "result": "tp",
-    "close_price": 4247.19,
-    "close_time": "2026-08-07T01:32:00",
-    "pnl_points": 150.0,
-    "pnl_percent": 0.035,
-    "lot": 0.04
-  },
-  {
-    "id": 4,
-    "symbol": "XAUUSD",
-    "direction": "sell",
-    "entry_price": 4247.02,
-    "entry_time": "2026-08-07T01:35:00",
-    "tp_price": 4245.52,
-    "sl_price": 4249.02,
-    "status": "closed",
-    "result": "sl",
-    "close_price": 4249.02,
-    "close_time": "2026-08-07T01:36:00",
-    "pnl_points": -200.0,
-    "pnl_percent": -0.047,
-    "lot": 0.04
-  },
-  {
-    "id": 5,
-    "symbol": "XAUUSD",
-    "direction": "buy",
-    "entry_price": 4248.72,
-    "entry_time": "2026-08-07T01:38:00",
-    "tp_price": 4250.22,
-    "sl_price": 4246.72,
-    "status": "closed",
-    "result": "tp",
-    "close_price": 4250.22,
-    "close_time": "2026-08-07T01:40:00",
-    "pnl_points": 150.0,
-    "pnl_percent": 0.035,
-    "lot": 0.04
-  },
-  {
-    "id": 6,
-    "symbol": "XAUUSD",
-    "direction": "sell",
-    "entry_price": 4236.65,
-    "entry_time": "2026-08-07T02:09:00",
-    "tp_price": 4235.15,
-    "sl_price": 4238.65,
-    "status": "closed",
-    "result": "tp",
-    "close_price": 4235.15,
-    "close_time": "2026-08-07T02:10:00",
-    "pnl_points": 150.0,
-    "pnl_percent": 0.035,
-    "lot": 0.04
-  },
-  {
-    "id": 7,
-    "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4248.92,
     "entry_time": "2026-08-07T02:28:00",
@@ -109,10 +13,11 @@
     "close_time": "2026-08-07T02:32:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 8,
+    "id": 2,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4246.88,
@@ -125,10 +30,11 @@
     "close_time": "2026-08-07T02:41:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 9,
+    "id": 3,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4245.11,
@@ -141,10 +47,11 @@
     "close_time": "2026-08-07T02:43:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 10,
+    "id": 4,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4242.33,
@@ -157,10 +64,11 @@
     "close_time": "2026-08-07T03:08:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 11,
+    "id": 5,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4238.15,
@@ -173,10 +81,11 @@
     "close_time": "2026-08-07T03:22:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 12,
+    "id": 6,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4238.01,
@@ -189,10 +98,11 @@
     "close_time": "2026-08-07T04:45:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 13,
+    "id": 7,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4241.72,
@@ -205,10 +115,11 @@
     "close_time": "2026-08-07T04:57:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 14,
+    "id": 8,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4242.38,
@@ -221,10 +132,11 @@
     "close_time": "2026-08-07T05:05:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 15,
+    "id": 9,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4241.41,
@@ -237,10 +149,11 @@
     "close_time": "2026-08-07T05:09:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 16,
+    "id": 10,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4240.38,
@@ -253,10 +166,11 @@
     "close_time": "2026-08-07T05:15:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 17,
+    "id": 11,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4239.61,
@@ -269,10 +183,11 @@
     "close_time": "2026-08-07T05:18:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 18,
+    "id": 12,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4241.06,
@@ -285,10 +200,11 @@
     "close_time": "2026-08-07T05:21:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 19,
+    "id": 13,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4241.82,
@@ -301,10 +217,11 @@
     "close_time": "2026-08-07T05:30:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 20,
+    "id": 14,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4242.18,
@@ -317,10 +234,11 @@
     "close_time": "2026-08-07T05:29:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 21,
+    "id": 15,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4243.94,
@@ -333,10 +251,11 @@
     "close_time": "2026-08-07T05:46:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 22,
+    "id": 16,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4245.69,
@@ -349,10 +268,11 @@
     "close_time": "2026-08-07T05:58:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 23,
+    "id": 17,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4245.83,
@@ -365,10 +285,11 @@
     "close_time": "2026-08-07T05:58:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 24,
+    "id": 18,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4245.93,
@@ -381,10 +302,11 @@
     "close_time": "2026-08-07T05:58:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 25,
+    "id": 19,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4245.37,
@@ -397,10 +319,11 @@
     "close_time": "2026-08-07T05:58:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 26,
+    "id": 20,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4244.92,
@@ -413,10 +336,11 @@
     "close_time": "2026-08-07T05:58:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 27,
+    "id": 21,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4247.61,
@@ -429,10 +353,11 @@
     "close_time": "2026-08-07T06:13:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 28,
+    "id": 22,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4247.26,
@@ -445,10 +370,11 @@
     "close_time": "2026-08-07T06:13:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 29,
+    "id": 23,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4246.49,
@@ -461,10 +387,11 @@
     "close_time": "2026-08-07T06:12:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 30,
+    "id": 24,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4247.29,
@@ -477,10 +404,11 @@
     "close_time": "2026-08-07T06:18:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 31,
+    "id": 25,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4249.08,
@@ -493,10 +421,11 @@
     "close_time": "2026-08-07T06:21:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 32,
+    "id": 26,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4243.63,
@@ -509,10 +438,11 @@
     "close_time": "2026-08-07T06:46:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 33,
+    "id": 27,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4242.06,
@@ -525,10 +455,11 @@
     "close_time": "2026-08-07T07:03:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 34,
+    "id": 28,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4241.58,
@@ -541,10 +472,11 @@
     "close_time": "2026-08-07T07:05:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 35,
+    "id": 29,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4238.63,
@@ -557,10 +489,11 @@
     "close_time": "2026-08-07T07:06:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 36,
+    "id": 30,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4241.77,
@@ -573,10 +506,11 @@
     "close_time": "2026-08-07T07:08:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 37,
+    "id": 31,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4234.78,
@@ -589,10 +523,11 @@
     "close_time": "2026-08-07T07:15:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 38,
+    "id": 32,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4234.86,
@@ -605,10 +540,11 @@
     "close_time": "2026-08-07T07:25:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 39,
+    "id": 33,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4232.14,
@@ -621,10 +557,11 @@
     "close_time": "2026-08-07T07:26:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 40,
+    "id": 34,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4237.8,
@@ -637,10 +574,11 @@
     "close_time": "2026-08-07T07:33:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 41,
+    "id": 35,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4240.53,
@@ -653,10 +591,11 @@
     "close_time": "2026-08-07T07:34:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 42,
+    "id": 36,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4244.73,
@@ -669,10 +608,11 @@
     "close_time": "2026-08-07T07:51:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 43,
+    "id": 37,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4244.1,
@@ -685,10 +625,11 @@
     "close_time": "2026-08-07T07:53:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 44,
+    "id": 38,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4241.81,
@@ -701,10 +642,11 @@
     "close_time": "2026-08-07T08:04:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 45,
+    "id": 39,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4242.21,
@@ -717,10 +659,11 @@
     "close_time": "2026-08-07T08:09:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 46,
+    "id": 40,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4253.99,
@@ -733,10 +676,11 @@
     "close_time": "2026-08-07T08:20:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 47,
+    "id": 41,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4252.94,
@@ -749,10 +693,11 @@
     "close_time": "2026-08-07T08:21:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 48,
+    "id": 42,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4255.06,
@@ -765,10 +710,11 @@
     "close_time": "2026-08-07T08:27:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 49,
+    "id": 43,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4258.83,
@@ -781,10 +727,11 @@
     "close_time": "2026-08-07T08:31:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 50,
+    "id": 44,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4260.61,
@@ -797,10 +744,11 @@
     "close_time": "2026-08-07T08:38:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 51,
+    "id": 45,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4257.51,
@@ -813,10 +761,11 @@
     "close_time": "2026-08-07T08:42:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 52,
+    "id": 46,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4258.62,
@@ -829,10 +778,11 @@
     "close_time": "2026-08-07T08:45:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 53,
+    "id": 47,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4258.15,
@@ -845,10 +795,11 @@
     "close_time": "2026-08-07T08:53:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 54,
+    "id": 48,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4259.83,
@@ -861,10 +812,11 @@
     "close_time": "2026-08-07T09:00:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 55,
+    "id": 49,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4257.57,
@@ -877,10 +829,11 @@
     "close_time": "2026-08-07T09:05:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 56,
+    "id": 50,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4257.62,
@@ -893,10 +846,11 @@
     "close_time": "2026-08-07T09:05:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 57,
+    "id": 51,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4256.75,
@@ -909,10 +863,11 @@
     "close_time": "2026-08-07T09:05:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 58,
+    "id": 52,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4254.67,
@@ -925,10 +880,11 @@
     "close_time": "2026-08-07T09:12:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 59,
+    "id": 53,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4253.52,
@@ -941,10 +897,11 @@
     "close_time": "2026-08-07T09:26:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 60,
+    "id": 54,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4254.58,
@@ -957,10 +914,11 @@
     "close_time": "2026-08-07T09:26:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 61,
+    "id": 55,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4252.24,
@@ -973,10 +931,11 @@
     "close_time": "2026-08-07T09:28:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 62,
+    "id": 56,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4254.12,
@@ -989,10 +948,11 @@
     "close_time": "2026-08-07T09:51:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 63,
+    "id": 57,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4255.57,
@@ -1005,10 +965,11 @@
     "close_time": "2026-08-07T09:52:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 64,
+    "id": 58,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4258.62,
@@ -1021,10 +982,11 @@
     "close_time": "2026-08-07T10:00:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 65,
+    "id": 59,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4260.82,
@@ -1037,10 +999,11 @@
     "close_time": "2026-08-07T10:28:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 66,
+    "id": 60,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4260.57,
@@ -1053,10 +1016,11 @@
     "close_time": "2026-08-07T10:28:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 67,
+    "id": 61,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4259.76,
@@ -1069,10 +1033,11 @@
     "close_time": "2026-08-07T10:27:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 68,
+    "id": 62,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4260.61,
@@ -1085,10 +1050,11 @@
     "close_time": "2026-08-07T10:28:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 69,
+    "id": 63,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4260.5,
@@ -1101,10 +1067,11 @@
     "close_time": "2026-08-07T10:27:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 70,
+    "id": 64,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4263.14,
@@ -1117,10 +1084,11 @@
     "close_time": "2026-08-07T10:34:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 71,
+    "id": 65,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4263.65,
@@ -1133,10 +1101,11 @@
     "close_time": "2026-08-07T10:49:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 72,
+    "id": 66,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4266.19,
@@ -1149,10 +1118,11 @@
     "close_time": "2026-08-07T11:01:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 73,
+    "id": 67,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4267.32,
@@ -1165,10 +1135,11 @@
     "close_time": "2026-08-07T11:07:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 74,
+    "id": 68,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4263.39,
@@ -1181,10 +1152,11 @@
     "close_time": "2026-08-07T11:12:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 75,
+    "id": 69,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4262.71,
@@ -1197,10 +1169,11 @@
     "close_time": "2026-08-07T11:19:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 76,
+    "id": 70,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4267.21,
@@ -1213,10 +1186,11 @@
     "close_time": "2026-08-07T11:29:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 77,
+    "id": 71,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4264.59,
@@ -1229,10 +1203,11 @@
     "close_time": "2026-08-07T11:39:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 78,
+    "id": 72,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4269.69,
@@ -1245,10 +1220,11 @@
     "close_time": "2026-08-07T11:50:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 79,
+    "id": 73,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4268.57,
@@ -1261,10 +1237,11 @@
     "close_time": "2026-08-07T11:52:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 80,
+    "id": 74,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4268.27,
@@ -1277,10 +1254,11 @@
     "close_time": "2026-08-07T11:53:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 81,
+    "id": 75,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4266.67,
@@ -1293,10 +1271,11 @@
     "close_time": "2026-08-07T11:58:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 82,
+    "id": 76,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4266.09,
@@ -1309,10 +1288,11 @@
     "close_time": "2026-08-07T12:00:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 83,
+    "id": 77,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4266.64,
@@ -1325,10 +1305,11 @@
     "close_time": "2026-08-07T12:00:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 84,
+    "id": 78,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4273.39,
@@ -1341,10 +1322,11 @@
     "close_time": "2026-08-07T12:10:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 85,
+    "id": 79,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4271.29,
@@ -1357,10 +1339,11 @@
     "close_time": "2026-08-07T12:16:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 86,
+    "id": 80,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4272.39,
@@ -1373,10 +1356,11 @@
     "close_time": "2026-08-07T12:16:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 87,
+    "id": 81,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4280.16,
@@ -1389,10 +1373,11 @@
     "close_time": "2026-08-07T12:34:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 88,
+    "id": 82,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4278.89,
@@ -1405,10 +1390,11 @@
     "close_time": "2026-08-07T12:34:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 89,
+    "id": 83,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4282.89,
@@ -1421,10 +1407,11 @@
     "close_time": "2026-08-07T12:40:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 90,
+    "id": 84,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4282.03,
@@ -1437,10 +1424,11 @@
     "close_time": "2026-08-07T12:40:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 91,
+    "id": 85,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4287.39,
@@ -1453,10 +1441,11 @@
     "close_time": "2026-08-07T12:48:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 92,
+    "id": 86,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4283.94,
@@ -1469,10 +1458,11 @@
     "close_time": "2026-08-07T13:00:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 93,
+    "id": 87,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4294.03,
@@ -1485,10 +1475,11 @@
     "close_time": "2026-08-07T13:14:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 94,
+    "id": 88,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4293.34,
@@ -1501,10 +1492,11 @@
     "close_time": "2026-08-07T13:19:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 95,
+    "id": 89,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4291.38,
@@ -1517,10 +1509,11 @@
     "close_time": "2026-08-07T13:46:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 96,
+    "id": 90,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4291.5,
@@ -1533,10 +1526,11 @@
     "close_time": "2026-08-07T13:46:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 97,
+    "id": 91,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4292.22,
@@ -1549,10 +1543,11 @@
     "close_time": "2026-08-07T13:43:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 98,
+    "id": 92,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4291.06,
@@ -1565,10 +1560,11 @@
     "close_time": "2026-08-07T13:46:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 99,
+    "id": 93,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4290.0,
@@ -1581,10 +1577,11 @@
     "close_time": "2026-08-07T13:47:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 100,
+    "id": 94,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4286.51,
@@ -1597,10 +1594,11 @@
     "close_time": "2026-08-07T14:00:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 101,
+    "id": 95,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4285.7,
@@ -1613,10 +1611,11 @@
     "close_time": "2026-08-07T14:04:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.047,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 102,
+    "id": 96,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4287.25,
@@ -1629,10 +1628,11 @@
     "close_time": "2026-08-07T14:05:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 103,
+    "id": 97,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4285.13,
@@ -1645,10 +1645,11 @@
     "close_time": "2026-08-07T14:20:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 104,
+    "id": 98,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4290.99,
@@ -1661,10 +1662,11 @@
     "close_time": "2026-08-07T14:31:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 105,
+    "id": 99,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4296.07,
@@ -1677,10 +1679,11 @@
     "close_time": "2026-08-07T14:43:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 106,
+    "id": 100,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4297.19,
@@ -1693,10 +1696,11 @@
     "close_time": "2026-08-07T14:43:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 107,
+    "id": 101,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4299.37,
@@ -1709,10 +1713,11 @@
     "close_time": "2026-08-07T14:47:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 108,
+    "id": 102,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4295.27,
@@ -1725,10 +1730,11 @@
     "close_time": "2026-08-07T14:54:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 109,
+    "id": 103,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4294.99,
@@ -1741,10 +1747,11 @@
     "close_time": "2026-08-07T14:56:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 110,
+    "id": 104,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4295.04,
@@ -1757,10 +1764,11 @@
     "close_time": "2026-08-07T15:01:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 111,
+    "id": 105,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4309.31,
@@ -1773,10 +1781,11 @@
     "close_time": "2026-08-07T15:17:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 112,
+    "id": 106,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4310.84,
@@ -1789,10 +1798,11 @@
     "close_time": "2026-08-07T15:17:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 113,
+    "id": 107,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4308.05,
@@ -1805,10 +1815,11 @@
     "close_time": "2026-08-07T15:20:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 114,
+    "id": 108,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4307.12,
@@ -1821,10 +1832,11 @@
     "close_time": "2026-08-07T15:23:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 115,
+    "id": 109,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4305.02,
@@ -1837,10 +1849,11 @@
     "close_time": "2026-08-07T15:24:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 116,
+    "id": 110,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4307.55,
@@ -1853,10 +1866,11 @@
     "close_time": "2026-08-07T15:26:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 117,
+    "id": 111,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4306.3,
@@ -1869,10 +1883,11 @@
     "close_time": "2026-08-07T15:48:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 118,
+    "id": 112,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4304.94,
@@ -1885,10 +1900,11 @@
     "close_time": "2026-08-07T15:40:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 119,
+    "id": 113,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4305.86,
@@ -1901,10 +1917,11 @@
     "close_time": "2026-08-07T15:43:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 120,
+    "id": 114,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4306.48,
@@ -1917,10 +1934,11 @@
     "close_time": "2026-08-07T15:48:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 121,
+    "id": 115,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4306.55,
@@ -1933,10 +1951,11 @@
     "close_time": "2026-08-07T15:51:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 122,
+    "id": 116,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4309.29,
@@ -1949,10 +1968,11 @@
     "close_time": "2026-08-07T15:57:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 123,
+    "id": 117,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4303.93,
@@ -1965,10 +1985,11 @@
     "close_time": "2026-08-07T16:06:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 124,
+    "id": 118,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4318.18,
@@ -1981,10 +2002,11 @@
     "close_time": "2026-08-07T16:18:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 125,
+    "id": 119,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4316.72,
@@ -1997,10 +2019,11 @@
     "close_time": "2026-08-07T16:27:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 126,
+    "id": 120,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4315.16,
@@ -2013,10 +2036,11 @@
     "close_time": "2026-08-07T16:36:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 127,
+    "id": 121,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4310.94,
@@ -2029,10 +2053,11 @@
     "close_time": "2026-08-07T16:43:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 128,
+    "id": 122,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4309.88,
@@ -2045,10 +2070,11 @@
     "close_time": "2026-08-07T16:49:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 129,
+    "id": 123,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4312.89,
@@ -2061,10 +2087,11 @@
     "close_time": "2026-08-07T16:55:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 130,
+    "id": 124,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4313.75,
@@ -2077,10 +2104,11 @@
     "close_time": "2026-08-07T17:01:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 131,
+    "id": 125,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4316.55,
@@ -2093,10 +2121,11 @@
     "close_time": "2026-08-07T17:02:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 132,
+    "id": 126,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4317.72,
@@ -2109,10 +2138,11 @@
     "close_time": "2026-08-07T17:10:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 133,
+    "id": 127,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4320.23,
@@ -2125,10 +2155,11 @@
     "close_time": "2026-08-07T17:22:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 134,
+    "id": 128,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4317.14,
@@ -2141,10 +2172,11 @@
     "close_time": "2026-08-07T17:30:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 135,
+    "id": 129,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4322.39,
@@ -2157,10 +2189,11 @@
     "close_time": "2026-08-07T17:44:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 136,
+    "id": 130,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4325.83,
@@ -2173,10 +2206,11 @@
     "close_time": "2026-08-07T17:57:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 137,
+    "id": 131,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4322.62,
@@ -2189,10 +2223,11 @@
     "close_time": "2026-08-07T18:18:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 138,
+    "id": 132,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4323.69,
@@ -2205,10 +2240,11 @@
     "close_time": "2026-08-07T18:20:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 139,
+    "id": 133,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4322.53,
@@ -2221,10 +2257,11 @@
     "close_time": "2026-08-07T18:22:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 140,
+    "id": 134,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4326.54,
@@ -2237,10 +2274,11 @@
     "close_time": "2026-08-07T18:27:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 141,
+    "id": 135,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4312.44,
@@ -2253,10 +2291,11 @@
     "close_time": "2026-08-07T18:54:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 142,
+    "id": 136,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4310.75,
@@ -2269,10 +2308,11 @@
     "close_time": "2026-08-07T18:56:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 143,
+    "id": 137,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4310.53,
@@ -2285,10 +2325,11 @@
     "close_time": "2026-08-07T19:00:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 144,
+    "id": 138,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4353.76,
@@ -2301,10 +2342,11 @@
     "close_time": "2026-08-07T19:01:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.034,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 145,
+    "id": 139,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4359.37,
@@ -2317,10 +2359,11 @@
     "close_time": "2026-08-07T19:07:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 146,
+    "id": 140,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4351.44,
@@ -2333,10 +2376,11 @@
     "close_time": "2026-08-07T19:39:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 147,
+    "id": 141,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4349.29,
@@ -2349,10 +2393,11 @@
     "close_time": "2026-08-07T19:56:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 148,
+    "id": 142,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4355.33,
@@ -2365,10 +2410,11 @@
     "close_time": "2026-08-07T19:58:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 149,
+    "id": 143,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4356.77,
@@ -2381,10 +2427,11 @@
     "close_time": "2026-08-07T20:03:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 150,
+    "id": 144,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4335.72,
@@ -2397,10 +2444,11 @@
     "close_time": "2026-08-07T20:37:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 151,
+    "id": 145,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4334.95,
@@ -2413,10 +2461,11 @@
     "close_time": "2026-08-07T20:39:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 152,
+    "id": 146,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4333.63,
@@ -2429,10 +2478,11 @@
     "close_time": "2026-08-07T20:42:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 153,
+    "id": 147,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4336.35,
@@ -2445,10 +2495,11 @@
     "close_time": "2026-08-07T20:47:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 154,
+    "id": 148,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4352.13,
@@ -2461,10 +2512,11 @@
     "close_time": "2026-08-07T20:58:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 155,
+    "id": 149,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4347.48,
@@ -2477,10 +2529,11 @@
     "close_time": "2026-08-07T21:05:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 156,
+    "id": 150,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4348.19,
@@ -2493,10 +2546,11 @@
     "close_time": "2026-08-07T21:07:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 157,
+    "id": 151,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4346.44,
@@ -2509,10 +2563,11 @@
     "close_time": "2026-08-07T21:08:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 158,
+    "id": 152,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4346.54,
@@ -2525,10 +2580,11 @@
     "close_time": "2026-08-07T21:13:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 159,
+    "id": 153,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4344.63,
@@ -2541,10 +2597,11 @@
     "close_time": "2026-08-07T21:27:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 160,
+    "id": 154,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4341.76,
@@ -2557,10 +2614,11 @@
     "close_time": "2026-08-07T21:30:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 161,
+    "id": 155,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4347.04,
@@ -2573,10 +2631,11 @@
     "close_time": "2026-08-07T21:31:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 162,
+    "id": 156,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4351.01,
@@ -2589,10 +2648,11 @@
     "close_time": "2026-08-07T21:41:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 163,
+    "id": 157,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4350.05,
@@ -2605,10 +2665,11 @@
     "close_time": "2026-08-07T22:06:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.034,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 164,
+    "id": 158,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4345.08,
@@ -2621,10 +2682,11 @@
     "close_time": "2026-08-07T22:22:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 165,
+    "id": 159,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4343.99,
@@ -2637,10 +2699,11 @@
     "close_time": "2026-08-07T22:29:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 166,
+    "id": 160,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4340.13,
@@ -2653,10 +2716,11 @@
     "close_time": "2026-08-07T22:34:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 167,
+    "id": 161,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4347.03,
@@ -2669,10 +2733,11 @@
     "close_time": "2026-08-07T22:41:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 168,
+    "id": 162,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4346.51,
@@ -2685,10 +2750,11 @@
     "close_time": "2026-08-07T22:48:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 169,
+    "id": 163,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4345.34,
@@ -2701,10 +2767,11 @@
     "close_time": "2026-08-07T22:49:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 170,
+    "id": 164,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4339.22,
@@ -2717,10 +2784,11 @@
     "close_time": "2026-08-07T23:03:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 171,
+    "id": 165,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4341.65,
@@ -2733,10 +2801,11 @@
     "close_time": "2026-08-07T23:17:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 172,
+    "id": 166,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4333.86,
@@ -2749,10 +2818,11 @@
     "close_time": "2026-08-07T23:25:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 173,
+    "id": 167,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4330.31,
@@ -2765,10 +2835,11 @@
     "close_time": "2026-08-07T23:30:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 174,
+    "id": 168,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4337.42,
@@ -2781,10 +2852,11 @@
     "close_time": "2026-08-07T23:39:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 175,
+    "id": 169,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4335.94,
@@ -2797,10 +2869,11 @@
     "close_time": "2026-08-07T23:47:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 176,
+    "id": 170,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4336.15,
@@ -2813,10 +2886,11 @@
     "close_time": "2026-08-07T23:47:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 177,
+    "id": 171,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4335.16,
@@ -2829,10 +2903,11 @@
     "close_time": "2026-08-07T23:52:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 178,
+    "id": 172,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4340.08,
@@ -2845,10 +2920,11 @@
     "close_time": "2026-08-07T23:58:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 179,
+    "id": 173,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4337.68,
@@ -2861,10 +2937,11 @@
     "close_time": "2026-08-08T00:05:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 180,
+    "id": 174,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4340.52,
@@ -2877,10 +2954,11 @@
     "close_time": "2026-08-08T00:36:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 181,
+    "id": 175,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4336.62,
@@ -2893,10 +2971,11 @@
     "close_time": "2026-08-08T00:50:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 182,
+    "id": 176,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4333.85,
@@ -2909,10 +2988,11 @@
     "close_time": "2026-08-08T00:57:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 183,
+    "id": 177,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4332.52,
@@ -2925,10 +3005,11 @@
     "close_time": "2026-08-08T00:59:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 184,
+    "id": 178,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4338.24,
@@ -2941,10 +3022,11 @@
     "close_time": "2026-08-08T01:11:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 185,
+    "id": 179,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4337.2,
@@ -2957,10 +3039,11 @@
     "close_time": "2026-08-08T01:14:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 186,
+    "id": 180,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4337.43,
@@ -2973,10 +3056,11 @@
     "close_time": "2026-08-08T01:22:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 187,
+    "id": 181,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4336.65,
@@ -2989,10 +3073,11 @@
     "close_time": "2026-08-08T01:22:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 188,
+    "id": 182,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4336.94,
@@ -3005,10 +3090,11 @@
     "close_time": "2026-08-08T01:23:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 189,
+    "id": 183,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4336.42,
@@ -3021,10 +3107,11 @@
     "close_time": "2026-08-08T01:23:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 190,
+    "id": 184,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4334.21,
@@ -3037,10 +3124,11 @@
     "close_time": "2026-08-08T01:30:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 191,
+    "id": 185,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4342.43,
@@ -3053,10 +3141,11 @@
     "close_time": "2026-08-08T01:39:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 192,
+    "id": 186,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4348.54,
@@ -3069,10 +3158,11 @@
     "close_time": "2026-08-08T02:02:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 193,
+    "id": 187,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4347.09,
@@ -3085,10 +3175,11 @@
     "close_time": "2026-08-08T02:02:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 194,
+    "id": 188,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4345.0,
@@ -3101,10 +3192,11 @@
     "close_time": "2026-08-08T02:09:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 195,
+    "id": 189,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4348.8,
@@ -3117,10 +3209,11 @@
     "close_time": "2026-08-08T02:23:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 196,
+    "id": 190,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4347.9,
@@ -3133,10 +3226,11 @@
     "close_time": "2026-08-08T02:23:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.034,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 197,
+    "id": 191,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4344.32,
@@ -3149,10 +3243,11 @@
     "close_time": "2026-08-08T02:38:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 198,
+    "id": 192,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4343.43,
@@ -3165,10 +3260,11 @@
     "close_time": "2026-08-08T02:39:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 199,
+    "id": 193,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4341.41,
@@ -3181,10 +3277,11 @@
     "close_time": "2026-08-08T02:40:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 200,
+    "id": 194,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4341.59,
@@ -3197,10 +3294,11 @@
     "close_time": "2026-08-08T02:46:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 201,
+    "id": 195,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4342.62,
@@ -3213,10 +3311,11 @@
     "close_time": "2026-08-08T02:46:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 202,
+    "id": 196,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4340.83,
@@ -3229,10 +3328,11 @@
     "close_time": "2026-08-08T02:50:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 203,
+    "id": 197,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4338.55,
@@ -3245,10 +3345,11 @@
     "close_time": "2026-08-08T03:00:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 204,
+    "id": 198,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4339.58,
@@ -3261,10 +3362,11 @@
     "close_time": "2026-08-08T03:00:00",
     "pnl_points": -200.0,
     "pnl_percent": -0.046,
+    "profit_currency": -8.0,
     "lot": 0.04
   },
   {
-    "id": 205,
+    "id": 199,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4337.04,
@@ -3277,10 +3379,11 @@
     "close_time": "2026-08-08T03:05:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 206,
+    "id": 200,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4337.52,
@@ -3293,10 +3396,11 @@
     "close_time": "2026-08-08T03:05:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 207,
+    "id": 201,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4340.64,
@@ -3309,10 +3413,11 @@
     "close_time": "2026-08-08T03:10:00",
     "pnl_points": 150.0,
     "pnl_percent": 0.035,
+    "profit_currency": 6.0,
     "lot": 0.04
   },
   {
-    "id": 208,
+    "id": 202,
     "symbol": "XAUUSD",
     "direction": "sell",
     "entry_price": 4340.46,
@@ -3325,10 +3430,11 @@
     "close_time": "2026-08-08T03:24:00",
     "pnl_points": -84.0,
     "pnl_percent": -0.019,
+    "profit_currency": -3.36,
     "lot": 0.04
   },
   {
-    "id": 209,
+    "id": 203,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4341.04,
@@ -3341,10 +3447,11 @@
     "close_time": "2026-08-08T03:24:00",
     "pnl_points": 26.0,
     "pnl_percent": 0.006,
+    "profit_currency": 1.04,
     "lot": 0.04
   },
   {
-    "id": 210,
+    "id": 204,
     "symbol": "XAUUSD",
     "direction": "buy",
     "entry_price": 4341.3,
@@ -3357,6 +3464,7 @@
     "close_time": "2026-08-08T03:24:00",
     "pnl_points": 0.0,
     "pnl_percent": 0.0,
+    "profit_currency": 0.0,
     "lot": 0.04
   }
 ]

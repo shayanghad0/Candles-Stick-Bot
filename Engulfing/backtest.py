@@ -1,10 +1,11 @@
 """
-Engulfing Pattern Backtester (MetaTrader5)
--------------------------------------------
+Engulfing Pattern Backtester (MetaTrader5) – with Balance & HTML Export
+-----------------------------------------------------------------------
 - Loads historical OHLC data from MT5.
-- Detects engulfing patterns on each candle (except the first).
-- Simulates trades with fixed TP/SL.
-- Outputs trade log, performance summary, and equity curve chart.
+- Detects engulfing patterns and simulates trades.
+- Uses mt5.order_calc_profit to compute profit in account currency.
+- Tracks balance, equity, and drawdown.
+- Exports a complete HTML report with charts and trade list.
 
 Requirements:
     pip install MetaTrader5 pandas mplfinance rich matplotlib
@@ -13,29 +14,26 @@ Requirements:
 import os
 import re
 import json
-import time
-import traceback
+import base64
+import io
 from datetime import datetime
 
 import MetaTrader5 as mt5
 import pandas as pd
-import mplfinance as mpf
-import matplotlib.pyplot as plt   # <-- ADDED for equity curve
-
+import matplotlib.pyplot as plt
 from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
 from rich.progress import track
 from rich.box import ROUNDED
 
 # ---------------------------------------------------------------------------
-# Configuration (edit these or make them interactive)
+# Configuration
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 TRADES_JSON = os.path.join(BASE_DIR, "backtest_trades.json")
 SUMMARY_CSV = os.path.join(BASE_DIR, "backtest_summary.csv")
-EQUITY_CHART = os.path.join(BASE_DIR, "equity_curve.png")
+HTML_REPORT = os.path.join(BASE_DIR, "backtest_report.html")
 
 TP_POINTS = 150
 SL_POINTS = 200
@@ -53,7 +51,7 @@ TIMEFRAMES = {
 console = Console()
 
 # ---------------------------------------------------------------------------
-# .env loading (same as original)
+# .env loading (unchanged)
 # ---------------------------------------------------------------------------
 def load_accounts(path=ENV_PATH):
     if not os.path.exists(path):
@@ -99,9 +97,6 @@ def choose_account(accounts):
             return accounts[int(choice) - 1]
         console.print("[red]Invalid choice, try again.[/red]")
 
-# ---------------------------------------------------------------------------
-# MT5 connection (only for data)
-# ---------------------------------------------------------------------------
 def connect(account):
     if not mt5.initialize():
         raise RuntimeError(f"initialize() failed, error code = {mt5.last_error()}")
@@ -112,7 +107,7 @@ def connect(account):
     console.print(f"[green]Connected[/green] as {account['name']} ({account['login']}) on {account['server']}.")
 
 # ---------------------------------------------------------------------------
-# Engulfing classification (unchanged)
+# Engulfing classification
 # ---------------------------------------------------------------------------
 def classify_engulfing(prev_candle, curr_candle):
     prev_open, prev_close = prev_candle["open"], prev_candle["close"]
@@ -131,7 +126,7 @@ def classify_engulfing(prev_candle, curr_candle):
     return None
 
 # ---------------------------------------------------------------------------
-# Simulated Trade Management
+# Simulated Trade – extended with profit in currency
 # ---------------------------------------------------------------------------
 class SimulatedTrade:
     def __init__(self, trade_id, symbol, direction, entry_price, entry_time, lot, point, tp_points, sl_points):
@@ -149,12 +144,12 @@ class SimulatedTrade:
         self.status = "open"
         self.close_price = None
         self.close_time = None
-        self.result = None  # "tp" or "sl"
+        self.result = None  # "tp", "sl", or "open_end"
         self.pnl_points = None
         self.pnl_percent = None
+        self.profit_currency = None   # in account currency
 
     def check_hit(self, high, low, timestamp):
-        """Check if this trade's TP or SL is hit within the given candle."""
         if self.status != "open":
             return False
         if self.direction == "buy":
@@ -197,17 +192,31 @@ class SimulatedTrade:
         self.pnl_percent = round(pnl_percent, 3)
         return self.pnl_points, self.pnl_percent
 
+    def compute_profit_currency(self):
+        """Use MT5's order_calc_profit to get profit in account currency."""
+        if self.close_price is None:
+            return None
+        order_type = mt5.ORDER_TYPE_BUY if self.direction == "buy" else mt5.ORDER_TYPE_SELL
+        profit = mt5.order_calc_profit(
+            order_type,
+            self.symbol,
+            self.lot,
+            self.entry_price,
+            self.close_price
+        )
+        self.profit_currency = profit
+        return profit
+
 # ---------------------------------------------------------------------------
-# Backtest Engine
+# Backtest Engine with Balance
 # ---------------------------------------------------------------------------
-def run_backtest(symbol, tf_const, tf_key, lot, candle_count):
+def run_backtest(symbol, tf_const, tf_key, lot, candle_count, initial_balance):
     # Fetch historical data
     rates = mt5.copy_rates_from_pos(symbol, tf_const, 0, candle_count)
     if rates is None or len(rates) < 2:
         console.print(f"[red]Failed to fetch data for {symbol} or not enough candles.[/red]")
         return
 
-    # Convert to list of dict for easier access
     candles = [{"open": r[1], "high": r[2], "low": r[3], "close": r[4],
                 "time": datetime.fromtimestamp(r[0])} for r in rates]
 
@@ -219,27 +228,30 @@ def run_backtest(symbol, tf_const, tf_key, lot, candle_count):
 
     trades = []
     trade_id_counter = 0
-    equity_curve = []  # list of (time, total_equity)
+    balance = initial_balance
+    equity_curve = []        # list of (time, equity)
+    balance_curve = []       # list of (time, balance) after closed trades
 
     console.print(f"Starting backtest on {symbol} {tf_key} with {len(candles)} candles...")
 
-    # We'll iterate through candles, starting from index 1 (so we have a previous candle)
     for i in track(range(1, len(candles)), description="Processing candles..."):
         prev = candles[i-1]
         curr = candles[i]
         curr_time = curr["time"]
 
-        # --- 1. Check existing open trades against this candle's high/low ---
+        # --- 1. Check existing open trades ---
         for trade in trades:
             if trade.status == "open":
                 hit = trade.check_hit(curr["high"], curr["low"], curr_time)
                 if hit:
                     trade.compute_pnl()
+                    profit = trade.compute_profit_currency()
+                    if profit is not None:
+                        balance += profit   # update balance on trade close
 
         # --- 2. Check for new engulfing signal ---
         pattern = classify_engulfing(prev, curr)
         if pattern:
-            # Open a simulated trade at the close of the current candle
             entry_price = curr["close"]
             direction = "buy" if pattern == "bullish" else "sell"
             trade_id_counter += 1
@@ -256,21 +268,25 @@ def run_backtest(symbol, tf_const, tf_key, lot, candle_count):
             )
             trades.append(new_trade)
 
-        # --- 3. Update equity curve (using current price of open trades) ---
-        # Compute total PnL: closed profit + floating PnL on open trades
-        closed_pnl = sum(t.pnl_points for t in trades if t.status == "closed" and t.pnl_points is not None)
+        # --- 3. Compute floating equity ---
         floating_pnl = 0.0
         for t in trades:
             if t.status == "open":
-                if t.direction == "buy":
-                    pnl = (curr["close"] - t.entry_price) / point
-                else:
-                    pnl = (t.entry_price - curr["close"]) / point
-                floating_pnl += pnl
-        total_pnl = closed_pnl + floating_pnl
-        equity_curve.append((curr_time, total_pnl))
+                order_type = mt5.ORDER_TYPE_BUY if t.direction == "buy" else mt5.ORDER_TYPE_SELL
+                profit_now = mt5.order_calc_profit(
+                    order_type,
+                    t.symbol,
+                    t.lot,
+                    t.entry_price,
+                    curr["close"]
+                )
+                if profit_now is not None:
+                    floating_pnl += profit_now
+        equity = balance + floating_pnl
+        equity_curve.append((curr_time, equity))
+        balance_curve.append((curr_time, balance))
 
-    # After processing all candles, close any remaining open trades at the last price
+    # Close any remaining open trades at the last price
     last_candle = candles[-1]
     for t in trades:
         if t.status == "open":
@@ -279,20 +295,28 @@ def run_backtest(symbol, tf_const, tf_key, lot, candle_count):
             t.result = "open_end"
             t.status = "closed"
             t.compute_pnl()
+            profit = t.compute_profit_currency()
+            if profit is not None:
+                balance += profit
+                # update last balance_curve entry
+                balance_curve[-1] = (balance_curve[-1][0], balance)
+
+    # Update final equity
+    equity_curve[-1] = (equity_curve[-1][0], balance)
 
     # -----------------------------------------------------------------------
-    # Generate summary and export
+    # Summary and Export
     # -----------------------------------------------------------------------
     console.print("\n[bold green]Backtest completed![/bold green]")
-    print_summary(trades, symbol, tf_key, lot)
+    print_summary(trades, symbol, tf_key, lot, initial_balance, balance)
     export_trades(trades, symbol, tf_key)
-    plot_equity_curve(equity_curve, symbol)
-    return trades
+    generate_html_report(trades, equity_curve, balance_curve, symbol, tf_key, lot, initial_balance, balance)
+    return trades, equity_curve, balance_curve
 
 # ---------------------------------------------------------------------------
-# Summary & Export
+# Summary (extended with balance)
 # ---------------------------------------------------------------------------
-def print_summary(trades, symbol, timeframe, lot):
+def print_summary(trades, symbol, timeframe, lot, initial_balance, final_balance):
     closed_trades = [t for t in trades if t.status == "closed"]
     total_trades = len(closed_trades)
     if total_trades == 0:
@@ -305,9 +329,8 @@ def print_summary(trades, symbol, timeframe, lot):
     lose_count = len(losing)
     win_rate = win_count / total_trades * 100 if total_trades else 0
 
-    total_pnl_points = sum(t.pnl_points for t in closed_trades if t.pnl_points is not None)
-    total_pnl_percent = sum(t.pnl_percent for t in closed_trades if t.pnl_percent is not None)
-    avg_pnl = total_pnl_points / total_trades if total_trades else 0
+    total_profit = sum(t.profit_currency for t in closed_trades if t.profit_currency is not None)
+    profit_factor = abs(sum(t.profit_currency for t in winning if t.profit_currency is not None)) / abs(sum(t.profit_currency for t in losing if t.profit_currency is not None)) if losing else float('inf')
 
     table = Table(title=f"Backtest Summary – {symbol} {timeframe}", box=ROUNDED)
     table.add_column("Metric", style="cyan")
@@ -316,14 +339,17 @@ def print_summary(trades, symbol, timeframe, lot):
     table.add_row("Wins", str(win_count))
     table.add_row("Losses", str(lose_count))
     table.add_row("Win Rate", f"{win_rate:.2f}%")
-    table.add_row("Total PnL (pts)", f"{total_pnl_points:.1f}")
-    table.add_row("Total PnL (%)", f"{total_pnl_percent:.2f}%")
-    table.add_row("Average PnL (pts)", f"{avg_pnl:.2f}")
+    table.add_row("Total Profit (currency)", f"{total_profit:.2f}")
+    table.add_row("Profit Factor", f"{profit_factor:.2f}")
+    table.add_row("Initial Balance", f"{initial_balance:.2f}")
+    table.add_row("Final Balance", f"{final_balance:.2f}")
     table.add_row("Lot size", str(lot))
     console.print(table)
 
+# ---------------------------------------------------------------------------
+# Export functions (JSON, CSV)
+# ---------------------------------------------------------------------------
 def export_trades(trades, symbol, timeframe):
-    # Save full trade log to JSON
     trade_list = []
     for t in trades:
         trade_list.append({
@@ -340,40 +366,142 @@ def export_trades(trades, symbol, timeframe):
             "close_time": t.close_time.isoformat() if t.close_time else None,
             "pnl_points": t.pnl_points,
             "pnl_percent": t.pnl_percent,
+            "profit_currency": t.profit_currency,
             "lot": t.lot,
         })
     with open(TRADES_JSON, "w") as f:
         json.dump(trade_list, f, indent=2)
     console.print(f"[green]Trade log saved to {TRADES_JSON}[/green]")
 
-    # Export summary CSV
     df = pd.DataFrame(trade_list)
     if not df.empty:
-        # Select relevant columns if they exist
         cols = ["id", "direction", "entry_price", "tp_price", "sl_price",
-                "result", "pnl_points", "pnl_percent"]
+                "result", "pnl_points", "profit_currency"]
         df_export = df[cols] if all(c in df.columns for c in cols) else df
         df_export.to_csv(SUMMARY_CSV, index=False)
         console.print(f"[green]Summary CSV saved to {SUMMARY_CSV}[/green]")
 
-def plot_equity_curve(equity_curve, symbol):
-    """Plot equity curve using matplotlib (no OHLC requirements)."""
-    if not equity_curve:
-        console.print("[yellow]No equity curve data to plot.[/yellow]")
+# ---------------------------------------------------------------------------
+# HTML Report Generator (FIXED)
+# ---------------------------------------------------------------------------
+def generate_html_report(trades, equity_curve, balance_curve, symbol, timeframe, lot, initial_balance, final_balance):
+    """Create a self-contained HTML report with charts and trade list."""
+    closed = [t for t in trades if t.status == "closed"]
+    total = len(closed)
+    if total == 0:
+        console.print("[yellow]No trades to report.[/yellow]")
         return
-    df = pd.DataFrame(equity_curve, columns=["time", "equity"])
-    df.set_index("time", inplace=True)
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(df.index, df["equity"], linewidth=1.5, color='blue')
-    plt.title(f"Equity Curve – {symbol}")
-    plt.xlabel("Time")
-    plt.ylabel("PnL (points)")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(EQUITY_CHART, dpi=120, bbox_inches="tight")
-    plt.close()
-    console.print(f"[green]Equity curve saved to {EQUITY_CHART}[/green]")
+    winning = [t for t in closed if t.result == "tp"]
+    losing = [t for t in closed if t.result == "sl"]
+    win_count = len(winning)
+    lose_count = len(losing)
+    win_rate = win_count / total * 100 if total else 0
+    total_profit = sum(t.profit_currency for t in closed if t.profit_currency is not None)
+    profit_factor = abs(sum(t.profit_currency for t in winning if t.profit_currency is not None)) / abs(sum(t.profit_currency for t in losing if t.profit_currency is not None)) if losing else float('inf')
+
+    # ---- Equity & Drawdown Charts ----
+    if equity_curve:
+        df_eq = pd.DataFrame(equity_curve, columns=["time", "equity"])
+        df_eq.set_index("time", inplace=True)
+        # drawdown
+        running_max = df_eq["equity"].cummax()
+        drawdown = (running_max - df_eq["equity"]) / running_max * 100
+        drawdown.fillna(0, inplace=True)
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        ax1.plot(df_eq.index, df_eq["equity"], label="Equity", color="blue", linewidth=1.5)
+        ax1.set_title(f"Equity Curve – {symbol} {timeframe}")
+        ax1.set_ylabel("Balance (currency)")
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+
+        ax2.fill_between(drawdown.index, 0, drawdown, color="red", alpha=0.3)
+        ax2.plot(drawdown.index, drawdown, color="red", linewidth=1)
+        ax2.set_title("Drawdown (%)")
+        ax2.set_ylabel("Drawdown %")
+        ax2.set_xlabel("Time")
+        ax2.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        # Save to bytes
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.read()).decode("utf-8")
+        plt.close()
+        chart_html = f'<img src="data:image/png;base64,{img_base64}" alt="Equity & Drawdown" style="max-width:100%;">'
+    else:
+        chart_html = "<p>No equity data available.</p>"
+
+    # ---- Trade table (FIXED) ----
+    trade_rows = ""
+    for t in closed:
+        profit = t.profit_currency if t.profit_currency is not None else 0
+        color = "green" if profit >= 0 else "red"
+        # FIX: format close price only if not None
+        close_str = f"{t.close_price:.5f}" if t.close_price is not None else "-"
+        trade_rows += f"""
+        <tr>
+            <td>{t.id}</td>
+            <td>{t.direction}</td>
+            <td>{t.entry_price:.5f}</td>
+            <td>{close_str}</td>
+            <td>{t.result}</td>
+            <td style="color:{color};">{profit:.2f}</td>
+        </tr>
+        """
+
+    # ---- Build HTML ----
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Backtest Report – {symbol} {timeframe}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; background: #f4f4f4; }}
+        .container {{ max-width: 1200px; margin: auto; background: white; padding: 20px; border-radius: 8px; }}
+        h1, h2 {{ color: #333; }}
+        .summary {{ display: flex; flex-wrap: wrap; gap: 20px; background: #e9ecef; padding: 15px; border-radius: 5px; }}
+        .summary-item {{ flex: 1; min-width: 120px; }}
+        .summary-item label {{ font-weight: bold; display: block; color: #555; }}
+        .summary-item span {{ font-size: 1.2em; }}
+        .chart {{ margin: 20px 0; }}
+        table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+        th, td {{ padding: 8px 12px; border: 1px solid #ddd; text-align: right; }}
+        th {{ background: #007bff; color: white; }}
+        tr:nth-child(even) {{ background: #f2f2f2; }}
+        .footer {{ text-align: center; margin-top: 30px; color: #888; font-size: 0.9em; }}
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Backtest Report – {symbol} {timeframe}</h1>
+    <div class="summary">
+        <div class="summary-item"><label>Total Trades</label><span>{total}</span></div>
+        <div class="summary-item"><label>Wins</label><span>{win_count}</span></div>
+        <div class="summary-item"><label>Losses</label><span>{lose_count}</span></div>
+        <div class="summary-item"><label>Win Rate</label><span>{win_rate:.1f}%</span></div>
+        <div class="summary-item"><label>Total Profit</label><span>{total_profit:.2f}</span></div>
+        <div class="summary-item"><label>Profit Factor</label><span>{profit_factor:.2f}</span></div>
+        <div class="summary-item"><label>Initial Balance</label><span>{initial_balance:.2f}</span></div>
+        <div class="summary-item"><label>Final Balance</label><span>{final_balance:.2f}</span></div>
+        <div class="summary-item"><label>Lot Size</label><span>{lot}</span></div>
+    </div>
+    <div class="chart">{chart_html}</div>
+    <h2>Trade List</h2>
+    <table>
+        <thead><tr><th>ID</th><th>Direction</th><th>Entry</th><th>Close</th><th>Result</th><th>Profit</th></tr></thead>
+        <tbody>{trade_rows}</tbody>
+    </table>
+    <div class="footer">Generated by Engulfing Backtester</div>
+</div>
+</body>
+</html>"""
+
+    with open(HTML_REPORT, "w", encoding="utf-8") as f:
+        f.write(html)
+    console.print(f"[green]HTML report saved to {HTML_REPORT}[/green]")
 
 # ---------------------------------------------------------------------------
 # Main
@@ -408,6 +536,15 @@ def main():
         console.print("[red]Invalid lot size. Using 0.01.[/red]")
         lot = 0.01
 
+    balance_input = console.input("Initial balance (e.g. 10000): ").strip()
+    try:
+        initial_balance = float(balance_input)
+        if initial_balance <= 0:
+            raise ValueError
+    except:
+        console.print("[red]Invalid balance. Using 10000.[/red]")
+        initial_balance = 10000.0
+
     candle_input = console.input("Number of OHLC candles to backtest (e.g. 750): ").strip()
     try:
         candle_count = int(candle_input)
@@ -417,7 +554,7 @@ def main():
         console.print("[red]Invalid number, using 500.[/red]")
         candle_count = 500
 
-    run_backtest(symbol, tf_const, tf_input, lot, candle_count)
+    run_backtest(symbol, tf_const, tf_input, lot, candle_count, initial_balance)
 
     mt5.shutdown()
 
