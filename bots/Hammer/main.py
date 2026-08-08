@@ -20,7 +20,7 @@ Flow:
      the chart with the outcome marked.
   7. If no signal: report "no signal" and wait for the next candle.
 
-Requirements: MetaTrader5, python-dotenv, rich, mplfinance, matplotlib
+Requirements: MetaTrader5, rich, mplfinance, matplotlib, pandas
 Run with:     python main.py
 
 IMPORTANT SAFETY NOTE
@@ -44,8 +44,7 @@ import math
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from dotenv import dotenv_values
-from rich.console import Console
+from rich.console import Console, Group
 from rich.table import Table
 from rich.panel import Panel
 from rich.prompt import Prompt, IntPrompt
@@ -173,7 +172,23 @@ def choose_account(accounts):
 # 2. Settings (.env) — bot behaviour, not account credentials
 # ==========================================================================
 def load_settings():
-    values = dotenv_values(SETTINGS_FILE) if SETTINGS_FILE.exists() else {}
+    """
+    Reads KEY=VALUE lines out of SETTINGS_FILE (now the same merged .env
+    as ACCOUNTS_FILE) and ignores everything else -- account blocks use
+    "Name     : value" and "====" separators, not KEY=VALUE, so this
+    parses manually instead of using python-dotenv, which would otherwise
+    emit a "could not parse statement" warning for every one of those lines.
+    """
+    values = {}
+    if SETTINGS_FILE.exists():
+        for line in SETTINGS_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                values[key] = val.strip()
     return {
         "TP_POINTS": float(values.get("TP_POINTS", 150)),
         "SL_POINTS": float(values.get("SL_POINTS", 200)),
@@ -229,13 +244,101 @@ def choose_symbol_and_timeframe():
 
 
 # ==========================================================================
-# 4. Wait for candle close
+# 4. Live candles (rich-rendered ASCII candlestick chart)
 # ==========================================================================
-def wait_for_next_candle_close(timeframe: str, buffer_seconds: float = 2.0):
+def fetch_live_candles(symbol: str, timeframe: str, count: int):
+    """
+    Same shape as fetch_candles(), but includes the currently-forming
+    candle as the last element (copy_rates_from_pos start=0). Used only
+    for the live chart display while waiting -- signal logic still uses
+    fetch_candles(), which only ever looks at fully closed candles.
+    """
+    if not MT5_AVAILABLE:
+        raise RuntimeError("MetaTrader5 not available")
+
+    tf = MT5_TIMEFRAME_MAP[timeframe]
+    rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
+    if rates is None or len(rates) == 0:
+        raise RuntimeError(f"copy_rates_from_pos returned no data: {mt5.last_error()}")
+
+    candles = []
+    for r in rates:
+        candles.append({
+            "time": datetime.fromtimestamp(int(r["time"])),
+            "open": float(r["open"]),
+            "high": float(r["high"]),
+            "low": float(r["low"]),
+            "close": float(r["close"]),
+        })
+    return candles
+
+
+def render_candle_chart(symbol: str, timeframe: str, candles: list, height: int = 18) -> Panel:
+    """
+    Draws an ASCII candlestick chart using only rich (block chars for
+    bodies, thin bars for wicks, colored green/red), with a price axis
+    down the left side and time labels along the bottom.
+    """
+    if not candles:
+        return Panel(Text("Waiting for data..."), title=f"{symbol} [{timeframe}]", border_style="cyan")
+
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
+    max_price = max(highs)
+    min_price = min(lows)
+    price_range = (max_price - min_price) or (max_price * 0.0001 or 1.0)
+
+    label_width = 11
+    rows = []
+    for row in range(height):
+        level_low = min_price + price_range * row / height
+        level_high = min_price + price_range * (row + 1) / height
+
+        line = Text()
+        for c in candles:
+            body_top = max(c["open"], c["close"])
+            body_bottom = min(c["open"], c["close"])
+            bullish = c["close"] >= c["open"]
+            style = "green" if bullish else "red"
+
+            if body_top >= level_low and body_bottom <= level_high:
+                ch = "█"
+            elif c["high"] >= level_low and c["low"] <= level_high:
+                ch = "│"
+            else:
+                ch = " "
+                style = None
+            line.append(ch + " ", style=style)
+
+        label = f"{level_high:>{label_width - 1}.2f} " if row % 3 == 0 or row == height - 1 else " " * label_width
+        rows.append((label, line))
+
+    chart = Text()
+    for label, line in reversed(rows):
+        chart.append(label, style="dim")
+        chart.append_text(line)
+        chart.append("\n")
+
+    axis = Text(" " * label_width)
+    step = max(1, len(candles) // 6)
+    for i, c in enumerate(candles):
+        if i % step == 0:
+            axis.append(c["time"].strftime("%H:%M").ljust(2 * step), style="dim")
+    chart.append(axis)
+
+    return Panel(chart, title=f"{symbol} [{timeframe}] — last {len(candles)} candles", border_style="cyan")
+
+
+# ==========================================================================
+# 5. Wait for candle close (shows the Live Candles chart while waiting)
+# ==========================================================================
+def wait_for_next_candle_close(symbol: str, timeframe: str, count: int, buffer_seconds: float = 2.0):
     """
     Sleeps until the next timeframe boundary + a small buffer, so the
     candle that just closed is guaranteed available from the broker.
     e.g. now = 15:45:14, timeframe M1 (60s) -> waits until 15:46:02.
+    While waiting, shows a live-updating candlestick chart (including
+    the still-forming candle) via render_candle_chart().
     """
     tf_seconds = TIMEFRAME_SECONDS[timeframe]
     now = datetime.now()
@@ -243,23 +346,32 @@ def wait_for_next_candle_close(timeframe: str, buffer_seconds: float = 2.0):
     next_boundary = math.ceil(epoch / tf_seconds) * tf_seconds
     target = datetime.fromtimestamp(next_boundary) + timedelta(seconds=buffer_seconds)
 
-    with Live(console=console, refresh_per_second=4) as live:
+    with Live(console=console, refresh_per_second=2) as live:
         while True:
             remaining = (target - datetime.now()).total_seconds()
+
+            try:
+                live_candles = fetch_live_candles(symbol, timeframe, count)
+                chart_panel = render_candle_chart(symbol, timeframe, live_candles)
+            except Exception as exc:
+                chart_panel = Panel(Text(f"Waiting for data... ({exc})", style="yellow"),
+                                     title=f"{symbol} [{timeframe}]", border_style="cyan")
+
+            countdown = Text(
+                f"Waiting for {timeframe} candle to close... "
+                f"target {target.strftime('%H:%M:%S')} ({max(remaining, 0):0.1f}s left)",
+                style="yellow"
+            )
+            live.update(Group(chart_panel, countdown))
+
             if remaining <= 0:
                 break
-            live.update(Text(
-                f"Waiting for {timeframe} candle to close... "
-                f"target {target.strftime('%H:%M:%S')} "
-                f"({remaining:0.1f}s left)",
-                style="cyan"
-            ))
-            time.sleep(min(0.25, remaining))
+            time.sleep(min(1.0, remaining))
     console.print(f"[green]Candle closed at {target.strftime('%H:%M:%S')} — fetching OHLC...[/green]")
 
 
 # ==========================================================================
-# 5. Candle fetching
+# 6. Candle fetching (closed candles only — used for signal logic)
 # ==========================================================================
 def fetch_candles(symbol: str, timeframe: str, count: int):
     """
@@ -290,7 +402,7 @@ def fetch_candles(symbol: str, timeframe: str, count: int):
 
 
 # ==========================================================================
-# 6. Hammer / Pin Bar detection
+# 7. Hammer / Pin Bar detection
 # ==========================================================================
 def is_hammer(candle: dict, prior_candles=None,
               min_lower_shadow_ratio=2.0, max_upper_shadow_ratio=0.15):
@@ -495,7 +607,7 @@ def main():
 
     try:
         while True:
-            wait_for_next_candle_close(timeframe)
+            wait_for_next_candle_close(symbol, timeframe, settings["CANDLES_TO_KEEP"])
             candles = fetch_candles(symbol, timeframe, settings["CANDLES_TO_KEEP"])
             last_candle = candles[-1]
             prior = candles[:-1]
