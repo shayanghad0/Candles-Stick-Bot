@@ -1,0 +1,8 @@
+id,pattern,direction,entry_price,tp_price,sl_price,result,pnl_points,profit_currency
+1,hammer,BUY,4253.89,4257.38,4249.530000000001,SL,-436.0,-4.36
+2,hammer,BUY,4255.4,4259.53,4257.61,TP,221.0,2.21
+3,shooting_star,SELL,4268.74,4264.57,4273.96,SL,-522.0,-5.22
+4,hammer,BUY,4282.7,4287.62,4284.92,TP,222.0,2.22
+5,hammer,BUY,4314.74,4319.33,4309.0,SL,-574.0,-5.74
+6,shooting_star,SELL,4316.76,4313.41,4320.95,SL,-419.0,-4.19
+7,hammer,BUY,4341.26,4343.97,4337.87,open_end,4.0,0.04

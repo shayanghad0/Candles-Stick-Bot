@@ -1,12 +1,16 @@
 """
-Doji Pattern Backtester (MetaTrader5) – with Balance & HTML Export
--------------------------------------------------------------------
-- Loads historical OHLC data from MT5.
-- Detects Doji / Dragonfly Doji / Gravestone Doji on each closed candle.
-- Simulates trades with fixed TP/SL (BUY on dragonfly, SELL on gravestone).
-- Uses mt5.order_calc_profit to compute profit in account currency.
-- Tracks balance, equity, and drawdown.
-- Exports a complete HTML report with charts and trade list.
+Doji Pattern Backtester (MetaTrader5) – Optimized Strategy
+-----------------------------------------------------------
+Advanced Features:
+    - Multi-EMA trend alignment (fast + slow EMA)
+    - RSI confirmation (avoid overbought/oversold entries)
+    - ATR-based candle size filter (skip tiny candles)
+    - ATR-based dynamic TP/SL with wider multipliers
+    - Trailing stop loss
+    - Risk-per-trade lot sizing
+    - Trade cooldown (no rapid-fire entries)
+    - Max drawdown circuit breaker
+    - Liquidation detection (balance <= 0)
 
 Requirements:
     pip install MetaTrader5 pandas mplfinance rich matplotlib
@@ -21,6 +25,7 @@ from datetime import datetime
 
 import MetaTrader5 as mt5
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from rich.console import Console
 from rich.table import Table
@@ -28,7 +33,7 @@ from rich.progress import track
 from rich.box import ROUNDED
 
 # ---------------------------------------------------------------------------
-# Configuration – you can tweak these
+# Configuration
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
@@ -36,8 +41,32 @@ TRADES_JSON = os.path.join(BASE_DIR, "doji_trades.json")
 SUMMARY_CSV = os.path.join(BASE_DIR, "doji_summary.csv")
 HTML_REPORT = os.path.join(BASE_DIR, "doji_report.html")
 
+# --- Strategy Mode ---
+USE_ADVANCED = True  # True = advanced strategy, False = classic fixed TP/SL
+
+# --- Classic Settings ---
 TP_POINTS = 150
 SL_POINTS = 200
+
+# --- Advanced Settings ---
+ATR_PERIOD = 14
+ATR_MIN_BODY_RATIO = 0.3      # Candle body must be >= 30% of ATR
+ATR_TP_MULTIPLIER = 2.0       # Tight TP — get out fast
+ATR_SL_MULTIPLIER = 2.5       # Balanced SL — not too wide
+RISK_PERCENT = 1.0
+TRAILING_ACTIVATION = 0.4     # Activate trailing at 40% of TP
+TRAILING_STEP = 50
+BREAKEVEN_ENABLED = True      # Move SL to entry when 1.0x ATR in profit
+BREAKEVEN_ATR_TRIGGER = 1.0
+MAX_DRAWDOWN_PERCENT = 20.0
+TRADE_COOLDOWN = 3            # Min candles between trades
+
+# --- Trend Filter ---
+EMA_FAST = 20
+EMA_SLOW = 50
+RSI_PERIOD = 14
+RSI_OVERBOUGHT = 70
+RSI_OVERSOLD = 30
 
 # Doji detection thresholds (as in the live bot)
 DOJI_BODY_RATIO = 0.10      # body <= 10% of full range
@@ -116,13 +145,72 @@ def connect(account):
     console.print(f"[green]Connected[/green] as {account['name']} ({account['login']}) on {account['server']}.")
 
 # ---------------------------------------------------------------------------
-# Pattern detection
+# Technical Indicators
 # ---------------------------------------------------------------------------
-def classify_candle(o, h, l, c):
+def calc_atr(candles, period=14):
+    if len(candles) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(candles)):
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+        prev_close = candles[i-1]["close"]
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    if len(trs) < period:
+        return None
+    return sum(trs[-period:]) / period
+
+def calc_ema(closes, period):
+    if len(closes) < period:
+        return None
+    ema = sum(closes[:period]) / period
+    multiplier = 2 / (period + 1)
+    for price in closes[period:]:
+        ema = (price - ema) * multiplier + ema
+    return ema
+
+def calc_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return None
+    deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(deltas)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def get_trend(candles, ema_fast=20, ema_slow=50):
+    closes = [c["close"] for c in candles]
+    ema_f = calc_ema(closes, ema_fast)
+    ema_s = calc_ema(closes, ema_slow)
+    if ema_f is None or ema_s is None:
+        return "neutral"
+    if ema_f > ema_s * 1.0005:
+        return "bullish"
+    elif ema_f < ema_s * 0.9995:
+        return "bearish"
+    return "neutral"
+
+# ---------------------------------------------------------------------------
+# Doji classification with ATR quality filter
+# ---------------------------------------------------------------------------
+def classify_candle(o, h, l, c, atr=None):
     """Returns a tuple: (pattern_name, direction) or (None, None)."""
     rng = h - l
     if rng <= 0:
         return None, None
+
+    # ATR quality filter: skip tiny candles
+    if atr is not None and atr > 0:
+        if rng < atr * ATR_MIN_BODY_RATIO:
+            return None, None  # Skip tiny candles
 
     body = abs(c - o)
     upper_wick = h - max(o, c)
@@ -142,10 +230,12 @@ def classify_candle(o, h, l, c):
     return "doji", None  # plain doji = no directional trade
 
 # ---------------------------------------------------------------------------
-# Simulated Trade
+# Simulated Trade – with trailing stop support
 # ---------------------------------------------------------------------------
 class SimulatedTrade:
-    def __init__(self, trade_id, symbol, direction, pattern, entry_price, entry_time, lot, point, tp_points, sl_points):
+    def __init__(self, trade_id, symbol, direction, pattern, entry_price, entry_time,
+                 lot, point, tp_points, sl_points, use_trailing=False,
+                 trailing_activation=0.5, trailing_step=100):
         self.id = trade_id
         self.symbol = symbol
         self.direction = direction  # "BUY" or "SELL"
@@ -165,10 +255,66 @@ class SimulatedTrade:
         self.pnl_points = None
         self.pnl_percent = None
         self.profit_currency = None
+        # Trailing stop
+        self.use_trailing = use_trailing
+        self.trailing_activation = trailing_activation
+        self.trailing_step = trailing_step
+        self.trailing_activated = False
+        self.best_price = entry_price
+        # Break-even
+        self.breakeven_enabled = False
+        self.breakeven_atr_trigger = 1.0
+        self.breakeven_moved = False
+        self.atr_value = None
+
+    def set_breakeven(self, enabled, atr_trigger=1.0, atr_value=None):
+        self.breakeven_enabled = enabled
+        self.breakeven_atr_trigger = atr_trigger
+        self.atr_value = atr_value
+
+    def check_breakeven(self, high, low):
+        if not self.breakeven_enabled or self.breakeven_moved or self.status != "open" or self.atr_value is None:
+            return
+        trigger_dist = self.atr_value * self.breakeven_atr_trigger
+        if self.direction == "BUY":
+            if high >= self.entry_price + trigger_dist and self.sl_price < self.entry_price:
+                self.sl_price = self.entry_price
+                self.breakeven_moved = True
+        else:
+            if low <= self.entry_price - trigger_dist and self.sl_price > self.entry_price:
+                self.sl_price = self.entry_price
+                self.breakeven_moved = True
+
+    def update_trailing(self, high, low):
+        """Update trailing stop if activated."""
+        if not self.use_trailing or self.status != "open":
+            return
+        tp_dist = abs(self.tp_price - self.entry_price)
+        activation_dist = tp_dist * self.trailing_activation
+        if self.direction == "BUY":
+            if high > self.best_price:
+                self.best_price = high
+            profit_dist = self.best_price - self.entry_price
+            if profit_dist >= activation_dist:
+                self.trailing_activated = True
+                new_sl = self.best_price - self.trailing_step * self.point
+                if new_sl > self.sl_price:
+                    self.sl_price = new_sl
+        else:
+            if low < self.best_price:
+                self.best_price = low
+            profit_dist = self.entry_price - self.best_price
+            if profit_dist >= activation_dist:
+                self.trailing_activated = True
+                new_sl = self.best_price + self.trailing_step * self.point
+                if new_sl < self.sl_price:
+                    self.sl_price = new_sl
 
     def check_hit(self, high, low, timestamp):
         if self.status != "open":
             return False
+        self.check_breakeven(high, low)
+        self.update_trailing(high, low)
         if self.direction == "BUY":
             if high >= self.tp_price:
                 self.close_price = self.tp_price
@@ -178,7 +324,11 @@ class SimulatedTrade:
                 return True
             if low <= self.sl_price:
                 self.close_price = self.sl_price
-                self.result = "SL"
+                # Trailing stop may have moved into profit
+                if self.trailing_activated and self.close_price > self.entry_price:
+                    self.result = "TP"
+                else:
+                    self.result = "SL"
                 self.status = "closed"
                 self.close_time = timestamp
                 return True
@@ -191,7 +341,11 @@ class SimulatedTrade:
                 return True
             if high >= self.sl_price:
                 self.close_price = self.sl_price
-                self.result = "SL"
+                # Trailing stop may have moved into profit
+                if self.trailing_activated and self.close_price < self.entry_price:
+                    self.result = "TP"
+                else:
+                    self.result = "SL"
                 self.status = "closed"
                 self.close_time = timestamp
                 return True
@@ -250,8 +404,13 @@ def run_backtest(symbol, tf_const, tf_key, lot, candle_count, initial_balance):
     balance = initial_balance
     equity_curve = []        # (time, equity)
     balance_curve = []       # (time, balance after closed trades)
+    liquidated = False
+    max_dd_hit = False
+    running_max_balance = initial_balance
+    last_trade_candle = -TRADE_COOLDOWN  # Allow first trade immediately
 
-    console.print(f"Starting backtest on {symbol} {tf_key} with {len(candles)} candles...")
+    strategy_label = "Advanced" if USE_ADVANCED else "Classic"
+    console.print(f"Starting {strategy_label} backtest on {symbol} {tf_key} with {len(candles)} candles...")
 
     for i in track(range(1, len(candles)), description="Processing candles..."):
         prev = candles[i-1]  # the candle that just closed
@@ -268,34 +427,147 @@ def run_backtest(symbol, tf_const, tf_key, lot, candle_count, initial_balance):
                     if profit is not None:
                         balance += profit
 
+        # --- Liquidation check ---
+        if balance <= 0:
+            console.print(f"[bold red]LIQUIDATED! Balance reached {balance:.2f} at candle {i}[/bold red]")
+            for t in trades:
+                if t.status == "open":
+                    t.close_price = curr["close"]
+                    t.close_time = curr_time
+                    t.result = "liquidated"
+                    t.status = "closed"
+                    t.compute_pnl()
+                    t.compute_profit_currency()
+            liquidated = True
+            break
+
+        # --- Max drawdown check ---
+        if balance > running_max_balance:
+            running_max_balance = balance
+        current_dd = (running_max_balance - balance) / running_max_balance * 100 if running_max_balance > 0 else 0
+        if current_dd >= MAX_DRAWDOWN_PERCENT:
+            console.print(f"[bold red]MAX DRAWDOWN {current_dd:.1f}% hit! Stopping.[/bold red]")
+            for t in trades:
+                if t.status == "open":
+                    t.close_price = curr["close"]
+                    t.close_time = curr_time
+                    t.result = "dd_stop"
+                    t.status = "closed"
+                    t.compute_pnl()
+                    t.compute_profit_currency()
+                    profit = t.profit_currency
+                    if profit is not None:
+                        balance += profit
+            max_dd_hit = True
+            break
+
         # --- 2. Detect pattern on the just-closed candle (prev) ---
-        pattern, direction = classify_candle(
-            prev["open"], prev["high"], prev["low"], prev["close"]
-        )
-        if pattern and direction:  # only dragonfly or gravestone (doji is ignored)
-            entry_price = prev["close"]
+        pattern, direction = None, None
 
-            # Optional slippage / spread adjustment
-            if SLIPPAGE_POINTS != 0:
-                if direction == "BUY":
-                    entry_price += SLIPPAGE_POINTS * point
-                else:
-                    entry_price -= SLIPPAGE_POINTS * point
+        if USE_ADVANCED:
+            # Cooldown check
+            if (i - last_trade_candle) < TRADE_COOLDOWN:
+                pass  # Skip signal check during cooldown
+            else:
+                atr = calc_atr(candles[:i+1], ATR_PERIOD)
+                pattern, direction = classify_candle(
+                    prev["open"], prev["high"], prev["low"], prev["close"], atr
+                )
+                if pattern and direction:
+                    # Trend filter: EMA alignment
+                    trend = get_trend(candles[:i+1], EMA_FAST, EMA_SLOW)
+                    if trend == "bullish" and direction == "SELL":
+                        pattern = None
+                    elif trend == "bearish" and direction == "BUY":
+                        pattern = None
 
-            trade_id_counter += 1
-            new_trade = SimulatedTrade(
-                trade_id=trade_id_counter,
-                symbol=symbol,
-                direction=direction,
-                pattern=pattern,
-                entry_price=entry_price,
-                entry_time=prev["time"],
-                lot=lot,
-                point=point,
-                tp_points=TP_POINTS,
-                sl_points=SL_POINTS
+                if pattern and direction:
+                    # RSI filter
+                    closes = [c["close"] for c in candles[:i+1]]
+                    rsi = calc_rsi(closes, RSI_PERIOD)
+                    if rsi is not None:
+                        if rsi > RSI_OVERBOUGHT and direction == "BUY":
+                            pattern = None  # Don't buy when overbought
+                        elif rsi < RSI_OVERSOLD and direction == "SELL":
+                            pattern = None  # Don't sell when oversold
+
+                if pattern and direction:
+                    entry_price = prev["close"]
+
+                    # Optional slippage / spread adjustment
+                    if SLIPPAGE_POINTS != 0:
+                        if direction == "BUY":
+                            entry_price += SLIPPAGE_POINTS * point
+                        else:
+                            entry_price -= SLIPPAGE_POINTS * point
+
+                    # ATR-based TP/SL
+                    if atr is not None:
+                        tp_pts = int(atr / point * ATR_TP_MULTIPLIER)
+                        sl_pts = int(atr / point * ATR_SL_MULTIPLIER)
+                    else:
+                        tp_pts = TP_POINTS
+                        sl_pts = SL_POINTS
+
+                    # Risk-per-trade sizing
+                    risk_amount = balance * (RISK_PERCENT / 100)
+                    sl_distance = sl_pts * point
+                    if sl_distance > 0:
+                        contract_size = symbol_info.trade_contract_size if symbol_info.trade_contract_size else 100
+                        calc_lot = round(risk_amount / (sl_distance * contract_size), 2)
+                        calc_lot = max(0.01, min(calc_lot, 10.0))
+                    else:
+                        calc_lot = lot
+                    trade_lot = calc_lot
+
+                    trade_id_counter += 1
+                    new_trade = SimulatedTrade(
+                        trade_id=trade_id_counter,
+                        symbol=symbol,
+                        direction=direction,
+                        pattern=pattern,
+                        entry_price=entry_price,
+                        entry_time=prev["time"],
+                        lot=trade_lot,
+                        point=point,
+                        tp_points=tp_pts,
+                        sl_points=sl_pts,
+                        use_trailing=True,
+                        trailing_activation=TRAILING_ACTIVATION,
+                        trailing_step=TRAILING_STEP
+                    )
+                    new_trade.set_breakeven(BREAKEVEN_ENABLED, BREAKEVEN_ATR_TRIGGER, atr)
+                    trades.append(new_trade)
+                    last_trade_candle = i
+        else:
+            # Classic mode
+            pattern, direction = classify_candle(
+                prev["open"], prev["high"], prev["low"], prev["close"]
             )
-            trades.append(new_trade)
+            if pattern and direction:  # only dragonfly or gravestone (doji is ignored)
+                entry_price = prev["close"]
+
+                # Optional slippage / spread adjustment
+                if SLIPPAGE_POINTS != 0:
+                    if direction == "BUY":
+                        entry_price += SLIPPAGE_POINTS * point
+                    else:
+                        entry_price -= SLIPPAGE_POINTS * point
+
+                trade_id_counter += 1
+                new_trade = SimulatedTrade(
+                    trade_id=trade_id_counter,
+                    symbol=symbol,
+                    direction=direction,
+                    pattern=pattern,
+                    entry_price=entry_price,
+                    entry_time=prev["time"],
+                    lot=lot,
+                    point=point,
+                    tp_points=TP_POINTS,
+                    sl_points=SL_POINTS
+                )
+                trades.append(new_trade)
 
         # --- 3. Compute floating equity ---
         floating_pnl = 0.0
@@ -316,34 +588,43 @@ def run_backtest(symbol, tf_const, tf_key, lot, candle_count, initial_balance):
         balance_curve.append((curr_time, balance))
 
     # Close any remaining open trades at the last price
-    last_candle = candles[-1]
-    for t in trades:
-        if t.status == "open":
-            t.close_price = last_candle["close"]
-            t.close_time = last_candle["time"]
-            t.result = "open_end"
-            t.status = "closed"
-            t.compute_pnl()
-            profit = t.compute_profit_currency()
-            if profit is not None:
-                balance += profit
-                balance_curve[-1] = (balance_curve[-1][0], balance)
+    if not liquidated and not max_dd_hit:
+        last_candle = candles[-1]
+        for t in trades:
+            if t.status == "open":
+                t.close_price = last_candle["close"]
+                t.close_time = last_candle["time"]
+                t.result = "open_end"
+                t.status = "closed"
+                t.compute_pnl()
+                profit = t.compute_profit_currency()
+                if profit is not None:
+                    balance += profit
+                    balance_curve[-1] = (balance_curve[-1][0], balance)
 
-    equity_curve[-1] = (equity_curve[-1][0], balance)
+    if equity_curve:
+        equity_curve[-1] = (equity_curve[-1][0], balance)
 
     # -----------------------------------------------------------------------
     # Summary and Export
     # -----------------------------------------------------------------------
     console.print("\n[bold green]Backtest completed![/bold green]")
-    print_summary(trades, symbol, tf_key, lot, initial_balance, balance)
-    export_trades(trades, symbol, tf_key)
-    generate_html_report(trades, equity_curve, balance_curve, symbol, tf_key, lot, initial_balance, balance)
+    if liquidated:
+        console.print("[bold red]ACCOUNT LIQUIDATED DURING BACKTEST[/bold red]")
+    elif max_dd_hit:
+        console.print("[bold red]MAX DRAWDOWN LIMIT REACHED[/bold red]")
+
+    print_summary(trades, symbol, tf_key, lot, initial_balance, balance, liquidated, max_dd_hit)
+    export_trades(trades, symbol, tf_key, liquidated, max_dd_hit)
+    generate_html_report(trades, equity_curve, balance_curve, symbol, tf_key, lot,
+                         initial_balance, balance, liquidated, max_dd_hit)
     return trades, equity_curve, balance_curve
 
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
-def print_summary(trades, symbol, timeframe, lot, initial_balance, final_balance):
+def print_summary(trades, symbol, timeframe, lot, initial_balance, final_balance,
+                  liquidated=False, max_dd_hit=False):
     closed_trades = [t for t in trades if t.status == "closed"]
     total_trades = len(closed_trades)
     if total_trades == 0:
@@ -359,24 +640,56 @@ def print_summary(trades, symbol, timeframe, lot, initial_balance, final_balance
     total_profit = sum(t.profit_currency for t in closed_trades if t.profit_currency is not None)
     profit_factor = abs(sum(t.profit_currency for t in winning if t.profit_currency is not None)) / abs(sum(t.profit_currency for t in losing if t.profit_currency is not None)) if losing else float('inf')
 
-    table = Table(title=f"Doji Backtest Summary – {symbol} {timeframe}", box=ROUNDED)
+    # Average win / average loss
+    avg_win = np.mean([t.profit_currency for t in winning if t.profit_currency is not None]) if winning else 0
+    avg_loss = np.mean([t.profit_currency for t in losing if t.profit_currency is not None]) if losing else 0
+    rr_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+
+    # Max consecutive losses
+    max_consec_loss = 0
+    current_consec = 0
+    for t in closed_trades:
+        if t.result == "SL":
+            current_consec += 1
+            max_consec_loss = max(max_consec_loss, current_consec)
+        else:
+            current_consec = 0
+
+    status_str = ""
+    if liquidated:
+        status_str = " [bold red]>>> LIQUIDATED <<<[/bold red]"
+    elif max_dd_hit:
+        status_str = " [bold red]>>> MAX DRAWDOWN STOP <<<[/bold red]"
+
+    table = Table(title=f"Doji Backtest Summary – {symbol} {timeframe}{status_str}", box=ROUNDED)
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="green")
+    if liquidated:
+        table.add_row("Status", "[bold red]LIQUIDATED[/bold red]")
+    elif max_dd_hit:
+        table.add_row("Status", "[bold red]MAX DRAWDOWN STOP[/bold red]")
+    else:
+        table.add_row("Status", "Completed")
     table.add_row("Total Trades", str(total_trades))
     table.add_row("Wins", str(win_count))
     table.add_row("Losses", str(lose_count))
     table.add_row("Win Rate", f"{win_rate:.2f}%")
+    table.add_row("Avg Win", f"{avg_win:.2f}")
+    table.add_row("Avg Loss", f"{avg_loss:.2f}")
+    table.add_row("Risk:Reward", f"1:{rr_ratio:.2f}")
+    table.add_row("Max Consec Losses", str(max_consec_loss))
     table.add_row("Total Profit (currency)", f"{total_profit:.2f}")
     table.add_row("Profit Factor", f"{profit_factor:.2f}")
     table.add_row("Initial Balance", f"{initial_balance:.2f}")
     table.add_row("Final Balance", f"{final_balance:.2f}")
+    table.add_row("Return %", f"{((final_balance - initial_balance) / initial_balance * 100):.2f}%")
     table.add_row("Lot size", str(lot))
     console.print(table)
 
 # ---------------------------------------------------------------------------
-# Export functions
+# Export functions (JSON, CSV)
 # ---------------------------------------------------------------------------
-def export_trades(trades, symbol, timeframe):
+def export_trades(trades, symbol, timeframe, liquidated=False, max_dd_hit=False):
     trade_list = []
     for t in trades:
         trade_list.append({
@@ -397,8 +710,17 @@ def export_trades(trades, symbol, timeframe):
             "profit_currency": t.profit_currency,
             "lot": t.lot,
         })
+
+    export_data = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "liquidated": liquidated,
+        "max_dd_hit": max_dd_hit,
+        "trades": trade_list
+    }
+
     with open(TRADES_JSON, "w") as f:
-        json.dump(trade_list, f, indent=2)
+        json.dump(export_data, f, indent=2)
     console.print(f"[green]Trade log saved to {TRADES_JSON}[/green]")
 
     df = pd.DataFrame(trade_list)
@@ -412,7 +734,8 @@ def export_trades(trades, symbol, timeframe):
 # ---------------------------------------------------------------------------
 # HTML Report Generator
 # ---------------------------------------------------------------------------
-def generate_html_report(trades, equity_curve, balance_curve, symbol, timeframe, lot, initial_balance, final_balance):
+def generate_html_report(trades, equity_curve, balance_curve, symbol, timeframe, lot,
+                         initial_balance, final_balance, liquidated=False, max_dd_hit=False):
     closed = [t for t in trades if t.status == "closed"]
     total = len(closed)
     if total == 0:
@@ -427,6 +750,27 @@ def generate_html_report(trades, equity_curve, balance_curve, symbol, timeframe,
     total_profit = sum(t.profit_currency for t in closed if t.profit_currency is not None)
     profit_factor = abs(sum(t.profit_currency for t in winning if t.profit_currency is not None)) / abs(sum(t.profit_currency for t in losing if t.profit_currency is not None)) if losing else float('inf')
 
+    avg_win = np.mean([t.profit_currency for t in winning if t.profit_currency is not None]) if winning else 0
+    avg_loss = np.mean([t.profit_currency for t in losing if t.profit_currency is not None]) if losing else 0
+    rr_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+
+    # Max consecutive losses
+    max_consec_loss = 0
+    current_consec = 0
+    for t in closed:
+        if t.result == "SL":
+            current_consec += 1
+            max_consec_loss = max(max_consec_loss, current_consec)
+        else:
+            current_consec = 0
+
+    if liquidated:
+        status_badge = '<span style="color:white;background:red;padding:4px 12px;border-radius:4px;font-weight:bold;">LIQUIDATED</span>'
+    elif max_dd_hit:
+        status_badge = '<span style="color:white;background:orange;padding:4px 12px;border-radius:4px;font-weight:bold;">MAX DRAWDOWN STOP</span>'
+    else:
+        status_badge = '<span style="color:white;background:green;padding:4px 12px;border-radius:4px;">Completed</span>'
+
     # ---- Equity & Drawdown Charts ----
     if equity_curve:
         df_eq = pd.DataFrame(equity_curve, columns=["time", "equity"])
@@ -437,6 +781,9 @@ def generate_html_report(trades, equity_curve, balance_curve, symbol, timeframe,
 
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
         ax1.plot(df_eq.index, df_eq["equity"], label="Equity", color="blue", linewidth=1.5)
+        ax1.axhline(y=initial_balance, color='gray', linestyle=':', linewidth=1, alpha=0.5, label='Initial Balance')
+        if liquidated:
+            ax1.axhline(y=0, color='red', linestyle='--', linewidth=2, label='Liquidation Line')
         ax1.set_title(f"Doji Equity Curve – {symbol} {timeframe}")
         ax1.set_ylabel("Balance (currency)")
         ax1.grid(True, alpha=0.3)
@@ -465,6 +812,11 @@ def generate_html_report(trades, equity_curve, balance_curve, symbol, timeframe,
         profit = t.profit_currency if t.profit_currency is not None else 0
         color = "green" if profit >= 0 else "red"
         close_str = f"{t.close_price:.5f}" if t.close_price is not None else "-"
+        result_style = ""
+        if t.result == "liquidated":
+            result_style = 'style="color:white;background:red;padding:2px 6px;border-radius:3px;"'
+        elif t.result == "dd_stop":
+            result_style = 'style="color:white;background:orange;padding:2px 6px;border-radius:3px;"'
         trade_rows += f"""
         <tr>
             <td>{t.id}</td>
@@ -472,7 +824,7 @@ def generate_html_report(trades, equity_curve, balance_curve, symbol, timeframe,
             <td>{t.direction}</td>
             <td>{t.entry_price:.5f}</td>
             <td>{close_str}</td>
-            <td>{t.result}</td>
+            <td {result_style}>{t.result}</td>
             <td style="color:{color};">{profit:.2f}</td>
         </tr>
         """
@@ -501,16 +853,21 @@ def generate_html_report(trades, equity_curve, balance_curve, symbol, timeframe,
 </head>
 <body>
 <div class="container">
-    <h1>Doji Backtest Report – {symbol} {timeframe}</h1>
+    <h1>Doji Backtest Report – {symbol} {timeframe} {status_badge}</h1>
     <div class="summary">
         <div class="summary-item"><label>Total Trades</label><span>{total}</span></div>
         <div class="summary-item"><label>Wins</label><span>{win_count}</span></div>
         <div class="summary-item"><label>Losses</label><span>{lose_count}</span></div>
         <div class="summary-item"><label>Win Rate</label><span>{win_rate:.1f}%</span></div>
+        <div class="summary-item"><label>Avg Win</label><span>{avg_win:.2f}</span></div>
+        <div class="summary-item"><label>Avg Loss</label><span>{avg_loss:.2f}</span></div>
+        <div class="summary-item"><label>R:R Ratio</label><span>1:{rr_ratio:.2f}</span></div>
+        <div class="summary-item"><label>Max Consec Losses</label><span>{max_consec_loss}</span></div>
         <div class="summary-item"><label>Total Profit</label><span>{total_profit:.2f}</span></div>
         <div class="summary-item"><label>Profit Factor</label><span>{profit_factor:.2f}</span></div>
         <div class="summary-item"><label>Initial Balance</label><span>{initial_balance:.2f}</span></div>
         <div class="summary-item"><label>Final Balance</label><span>{final_balance:.2f}</span></div>
+        <div class="summary-item"><label>Return</label><span>{((final_balance - initial_balance) / initial_balance * 100):.2f}%</span></div>
         <div class="summary-item"><label>Lot Size</label><span>{lot}</span></div>
     </div>
     <div class="chart">{chart_html}</div>
@@ -519,7 +876,7 @@ def generate_html_report(trades, equity_curve, balance_curve, symbol, timeframe,
         <thead><tr><th>ID</th><th>Pattern</th><th>Direction</th><th>Entry</th><th>Close</th><th>Result</th><th>Profit</th></tr></thead>
         <tbody>{trade_rows}</tbody>
     </table>
-    <div class="footer">Generated by Doji Backtester</div>
+    <div class="footer">Generated by Doji Backtester (Optimized)</div>
 </div>
 </body>
 </html>"""
