@@ -1,6 +1,0 @@
-id,pattern,direction,entry_price,tp_price,sl_price,result,pnl_points,profit_currency
-1,Hammer,BUY,4238.13,4239.63,4239.0,tp,87.0,0.87
-2,Hammer,BUY,4253.89,4257.320000000001,4248.75,sl,-514.0,-5.14
-3,Hammer,BUY,4255.4,4259.61,4257.61,tp,221.0,2.21
-4,Hammer,BUY,4282.7,4287.8,4284.92,tp,222.0,2.22
-5,Hammer,BUY,4335.46,4338.4800000000005,4338.24,tp,302.0,3.02
