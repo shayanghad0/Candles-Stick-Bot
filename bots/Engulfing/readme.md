@@ -1,4 +1,4 @@
-# Engulfing Pattern Watcher
+u# Engulfing Pattern Watcher
 
 A MetaTrader5-based trading bot that detects bullish and bearish engulfing candlestick patterns and executes live trades with automatic TP/SL management.
 
@@ -122,5 +122,4 @@ Bearish engulfing is the inverse.
 - Fixed lot size per trade
 - No multiple positions on same symbol
 - 50% TP notification for partial profit awareness
-- All trades logged with entry/exit prices and PnL
-
+- All trades logged with entry/exit prices and PnL.
