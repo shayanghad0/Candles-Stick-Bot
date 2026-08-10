@@ -1,0 +1,36 @@
+[
+  {
+    "ticket": 363466746,
+    "symbol": "XAUUSD",
+    "direction": "buy",
+    "volume": 0.01,
+    "entry": 4353.83,
+    "sl": 4351.83,
+    "tp": 4355.33,
+    "point": 0.01,
+    "open_time": "2026-08-10T20:22:03.477154",
+    "status": "closed",
+    "close_reason": "TP",
+    "close_price": 4355.44,
+    "close_time": "2026-08-10T20:28:28.731389",
+    "pnl_points": 161.0,
+    "pnl_pct": 80.5
+  },
+  {
+    "ticket": 363498883,
+    "symbol": "XAUUSD",
+    "direction": "buy",
+    "volume": 0.01,
+    "entry": 4363.83,
+    "sl": 4361.83,
+    "tp": 4365.33,
+    "point": 0.01,
+    "open_time": "2026-08-10T21:40:03.077545",
+    "status": "closed",
+    "close_reason": "CLOSED",
+    "close_price": 4363.63,
+    "close_time": "2026-08-10T21:43:33.280423",
+    "pnl_points": -20.0,
+    "pnl_pct": -10.0
+  }
+]
