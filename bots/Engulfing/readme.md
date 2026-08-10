@@ -123,3 +123,4 @@ Bearish engulfing is the inverse.
 - No multiple positions on same symbol
 - 50% TP notification for partial profit awareness
 - All trades logged with entry/exit prices and PnL
+
