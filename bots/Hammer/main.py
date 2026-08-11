@@ -492,7 +492,7 @@ def place_real_order(symbol: str, order: dict, settings: dict):
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
-        "volume": 0.01,
+        "volume": 0.02,
         "type": mt5.ORDER_TYPE_BUY,
         "price": mt5.symbol_info_tick(symbol).ask,
         "sl": order["sl"],

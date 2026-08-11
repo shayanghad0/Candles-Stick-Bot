@@ -82,7 +82,7 @@ DATA_DIR.mkdir(exist_ok=True)
 
 TP_POINTS = 150     # take profit distance, in points
 SL_POINTS = 200     # stop loss distance, in points
-LOT_SIZE = 0.10
+LOT_SIZE = 0.02
 CANDLES_TO_SAVE = 30
 MAGIC_NUMBER = 990011
 

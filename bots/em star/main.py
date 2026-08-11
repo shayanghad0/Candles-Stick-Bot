@@ -393,7 +393,7 @@ def calc_levels(symbol: str, direction: str) -> tuple[float, float, float, float
     return entry, sl, tp, point
 
 
-def place_order(symbol: str, direction: str, volume: float = 0.01) -> dict | None:
+def place_order(symbol: str, direction: str, volume: float = 0.02) -> dict | None:
     entry, sl, tp, point = calc_levels(symbol, direction)
     order_type = mt5.ORDER_TYPE_BUY if direction == "buy" else mt5.ORDER_TYPE_SELL
 

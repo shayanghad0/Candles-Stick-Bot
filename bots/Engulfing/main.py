@@ -324,18 +324,29 @@ def place_market_order(symbol, order_type, lot, point):
     return result.order, price
 
 def close_position(ticket):
+    """
+    Close an open position by sending an opposite market order.
+    For a BUY position, send a SELL; for a SELL position, send a BUY.
+    """
     pos = mt5.positions_get(ticket=ticket)
     if pos is None or len(pos) == 0:
         return None
     pos = pos[0]
     symbol = pos.symbol
     volume = pos.volume
+
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        console.print("[red]Failed to get tick for closing order.[/red]")
+        return None
+
     if pos.type == mt5.POSITION_TYPE_BUY:
-        order_type = mt5.ORDER_TYPE_CLOSE_BUY
-        price = mt5.symbol_info_tick(symbol).bid
+        order_type = mt5.ORDER_TYPE_SELL        # <-- fixed
+        price = tick.bid
     else:
-        order_type = mt5.ORDER_TYPE_CLOSE_SELL
-        price = mt5.symbol_info_tick(symbol).ask
+        order_type = mt5.ORDER_TYPE_BUY         # <-- fixed
+        price = tick.ask
+
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "position": ticket,
@@ -346,6 +357,8 @@ def close_position(ticket):
         "deviation": 20,
         "magic": 123456,
         "comment": "Engulfing close",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
     }
     return mt5.order_send(request)
 
@@ -442,8 +455,6 @@ def check_open_trades(trades, symbol, point, lot, tf_const, live_console):
                     trade["half_tp_notified"] = True
                     changed = True
                     profit = pos.profit
-                    pnl_points = profit / (lot * point)
-                    pnl_percent = profit / (trade["entry_price"] * lot * 100) * 100
                     live_console.log(Panel(
                         f"[bold yellow]50% TP reached[/bold yellow] on trade #{trade['id']} ({symbol})\n"
                         f"Level: {tp1:.5f}  Profit: {profit:.2f}",
@@ -466,8 +477,8 @@ def check_open_trades(trades, symbol, point, lot, tf_const, live_console):
         if hit:
             profit_before_close = pos.profit  # capture before closing
             close_res = close_position(ticket)
-            if close_res.retcode != mt5.TRADE_RETCODE_DONE:
-                console.print(f"[red]Failed to close position {ticket}: {close_res.comment}[/red]")
+            if close_res is None or close_res.retcode != mt5.TRADE_RETCODE_DONE:
+                console.print(f"[red]Failed to close position {ticket}: {close_res.comment if close_res else 'no response'}[/red]")
                 continue
 
             close_price = trade["tp_price"] if hit == "tp" else trade["sl_price"]
