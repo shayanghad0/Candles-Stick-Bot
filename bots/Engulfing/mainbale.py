@@ -8,6 +8,7 @@ Engulfing Pattern Watcher (MetaTrader5 + rich) – Live + Real Trading + Bale
 - Bale integration: sends open/close charts & SL/TP1/TP2 messages to channel.
 - Start/stop messages to admin.
 - Prompts for lot size.
+- Automatically adjusts lot if margin is insufficient (manual calculation fallback).
 
 Requirements:
     pip install MetaTrader5 rich mplfinance pandas requests
@@ -48,8 +49,8 @@ API_ENV_PATH = os.path.join(BASE_DIR, "api.env")
 TRADES_JSON = os.path.join(BASE_DIR, "trades.json")
 CHARTS_DIR = os.path.join(BASE_DIR, "charts")
 
-TP_POINTS = 100
-SL_POINTS = 250
+TP_POINTS = 1200
+SL_POINTS = 750
 CANDLES_TO_SHOW = 60
 PNG_CANDLES = 30
 
@@ -122,7 +123,7 @@ class BaleNotifier:
 bale: BaleNotifier = None
 
 # ---------------------------------------------------------------------------
-# MT5 account loading (unchanged)
+# MT5 account loading
 # ---------------------------------------------------------------------------
 def load_accounts(path=ENV_PATH):
     if not os.path.exists(path):
@@ -201,6 +202,125 @@ def connect(account):
         mt5.shutdown()
         raise RuntimeError(f"login() failed, error code = {mt5.last_error()}")
     console.print(f"[green]Connected[/green] as {account['name']} ({account['login']}) on {account['server']}.")
+
+# ---------------------------------------------------------------------------
+# Improved symbol selection with fallback and listing
+# ---------------------------------------------------------------------------
+def resolve_symbol(user_symbol):
+    """
+    Tries to find a valid symbol on the broker.
+    If user_symbol is not found, searches for symbols containing that text
+    (case-insensitive) and lets the user choose.
+    Also attempts to strip common suffixes like '.d', '.m', '.pro' etc.
+    """
+    # First, try exactly as entered
+    if mt5.symbol_select(user_symbol, True):
+        return user_symbol
+
+    # Get all symbols for search
+    all_symbols = mt5.symbols_get()
+    if not all_symbols:
+        return None
+
+    symbol_names = [s.name for s in all_symbols]
+
+    # Try stripped version: remove common suffixes
+    stripped = re.sub(r'\.(d|m|pro|ecn|raw|stp|demo|real)$', '', user_symbol, flags=re.IGNORECASE)
+    if stripped != user_symbol:
+        # Check if stripped exists
+        for name in symbol_names:
+            if name.upper() == stripped.upper():
+                console.print(f"[green]Found symbol '{name}' (suggested from '{user_symbol}'). Using it.[/green]")
+                mt5.symbol_select(name, True)
+                return name
+
+    # Search for symbols containing the user input (case-insensitive)
+    matches = [name for name in symbol_names if user_symbol.lower() in name.lower()]
+    if not matches:
+        # If no match, also try searching by common names (e.g. for gold)
+        if "XAU" in user_symbol or "GOLD" in user_symbol:
+            gold_matches = [name for name in symbol_names if "XAU" in name.upper() or "GOLD" in name.upper()]
+            if gold_matches:
+                matches = gold_matches
+
+    if not matches:
+        console.print(f"[red]No symbol found matching '{user_symbol}'.[/red]")
+        return None
+
+    if len(matches) == 1:
+        chosen = matches[0]
+        console.print(f"[green]Using symbol '{chosen}' (only match).[/green]")
+        mt5.symbol_select(chosen, True)
+        return chosen
+
+    # Multiple matches – let user choose
+    console.print(f"[yellow]Multiple symbols match '{user_symbol}':[/yellow]")
+    for i, name in enumerate(matches, start=1):
+        console.print(f"  {i}. {name}")
+    while True:
+        choice = console.input("Select number: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(matches):
+            chosen = matches[int(choice)-1]
+            mt5.symbol_select(chosen, True)
+            return chosen
+        console.print("[red]Invalid choice.[/red]")
+
+# ---------------------------------------------------------------------------
+# Margin adjustment with manual fallback
+# ---------------------------------------------------------------------------
+def adjust_lot_for_margin(symbol, requested_lot):
+    """
+    Checks available margin and adjusts lot if needed.
+    Uses manual calculation if margin_initial is missing.
+    Returns (adjusted_lot, warning_message)
+    """
+    account_info = mt5.account_info()
+    if account_info is None:
+        return requested_lot, "[yellow]Cannot get account info – using requested lot.[/yellow]"
+    
+    free_margin = account_info.margin_free
+    if free_margin <= 0:
+        return 0.0, "[red]Free margin is zero or negative – cannot trade.[/red]"
+    
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        return requested_lot, "[yellow]Cannot get symbol info – using requested lot.[/yellow]"
+    
+    # Try to get margin per lot from symbol info
+    margin_per_lot = symbol_info.margin_initial
+    if margin_per_lot is None or margin_per_lot <= 0:
+        margin_per_lot = symbol_info.margin_maintenance
+        if margin_per_lot is None or margin_per_lot <= 0:
+            # Manual calculation
+            contract_size = symbol_info.trade_contract_size
+            if contract_size is None or contract_size <= 0:
+                contract_size = 100  # default for many forex/CFDs
+            leverage = account_info.leverage
+            if leverage is None or leverage <= 0:
+                leverage = 100  # fallback
+            # Get current price (ask for buy, bid for sell – we use ask for conservative estimate)
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None:
+                return requested_lot, "[yellow]Cannot get tick – using requested lot.[/yellow]"
+            price = tick.ask
+            margin_per_lot = (contract_size * price) / leverage
+            console.print(f"[dim]Manual margin per lot: {margin_per_lot:.2f} (ContractSize={contract_size}, Price={price}, Leverage={leverage})[/dim]")
+    
+    if margin_per_lot <= 0:
+        return requested_lot, "[yellow]Margin per lot still unknown – using requested lot.[/yellow]"
+    
+    max_lot_possible = free_margin / margin_per_lot
+    max_lot_safe = max_lot_possible * 0.9  # safety buffer
+    
+    if requested_lot <= max_lot_safe:
+        return requested_lot, None
+    else:
+        adjusted = round(max_lot_safe, 2)
+        if adjusted <= 0:
+            return 0.0, f"[red]Requested lot {requested_lot} exceeds margin. Max possible: {max_lot_possible:.3f} – cannot trade.[/red]"
+        else:
+            warning = f"[yellow]Lot adjusted from {requested_lot} to {adjusted} (max safe: {max_lot_safe:.3f}).[/yellow]"
+            return adjusted, warning
 
 # ---------------------------------------------------------------------------
 # OHLC helpers
@@ -418,6 +538,15 @@ def open_trade(trades, direction, entry_price, point, symbol, tf_const, lot, liv
         order_type = "Short"
         mt5_direction = "sell"
 
+    # Adjust lot again (in case margin changed)
+    adjusted_lot, warn_msg = adjust_lot_for_margin(symbol, lot)
+    if warn_msg:
+        live_console.log(warn_msg)
+    if adjusted_lot <= 0:
+        live_console.log("[red]Lot too small to trade – skipping.[/red]")
+        return
+    lot = adjusted_lot  # use adjusted
+
     ticket = place_market_order(symbol, mt5_direction, lot, point, live_console)
     if not ticket:
         live_console.log("[red]Failed to open real order, skipping trade.[/red]")
@@ -503,7 +632,6 @@ def monitor_positions(trades, symbol, point, tf_const, live_console):
 
         pos = pos_list[0]
         current_price = pos.price_current
-        # current lot might be less if we already partially closed
         current_lot = pos.volume
 
         # --- 50% TP (partial close) ---
@@ -514,16 +642,14 @@ def monitor_positions(trades, symbol, point, tf_const, live_console):
                           (trade["direction"] == "sell" and current_price <= tp1)
                 if hit_tp1:
                     half_lot = trade["initial_lot"] / 2.0
-                    # Ensure half_lot <= current position volume
                     if half_lot > current_lot:
-                        half_lot = current_lot  # close whatever remains
+                        half_lot = current_lot
                     if half_lot > 0:
                         if close_position_volume(symbol, trade["ticket"], half_lot, live_console):
                             trade["half_tp_notified"] = True
                             trade["lot"] = current_lot - half_lot
                             changed = True
 
-                            # PNL for closed part
                             sign = 1 if trade["direction"] == "buy" else -1
                             closed_pnl_points = sign * (current_price - trade["entry_price"]) / point
                             closed_pnl_percent = sign * (current_price - trade["entry_price"]) / trade["entry_price"] * 100
@@ -544,12 +670,11 @@ def monitor_positions(trades, symbol, point, tf_const, live_console):
                                     f"Remaining lot: {trade['lot']}"
                                 )
                         else:
-                            # Partial close failed; still mark as notified to avoid endless attempts
                             trade["half_tp_notified"] = True
                             changed = True
                             live_console.log(f"[red]Failed to partial close for trade #{trade['id']}, flagged as notified.[/red]")
 
-        # --- Full TP/SL on remaining volume ---
+        # --- Full TP/SL ---
         hit = None
         if trade["direction"] == "buy":
             if current_price >= trade["tp_price"]:
@@ -568,7 +693,6 @@ def monitor_positions(trades, symbol, point, tf_const, live_console):
             pnl_points = direction_sign * (close_price - trade["entry_price"]) / point
             pnl_percent = direction_sign * (close_price - trade["entry_price"]) / trade["entry_price"] * 100
 
-            # Close remaining volume
             remaining_volume = trade.get("lot", trade["initial_lot"])
             if not close_position_volume(symbol, trade["ticket"], remaining_volume, live_console):
                 live_console.log(f"[red]Failed to close remaining volume for trade #{trade['id']}, will retry.[/red]")
@@ -598,7 +722,7 @@ def monitor_positions(trades, symbol, point, tf_const, live_console):
                             f"PNL per point : {pnl_points:.1f}"
                         )
                         bale.notify_channel_photo(chart_close, caption)
-            else:  # SL
+            else:
                 trade["chart_close"] = None
                 if bale and bale.channel_id:
                     bale.notify_channel(
@@ -624,7 +748,7 @@ def monitor_positions(trades, symbol, point, tf_const, live_console):
         save_trades(trades)
 
 # ---------------------------------------------------------------------------
-# Orders table (shows open trades + remaining lot)
+# Orders table
 # ---------------------------------------------------------------------------
 def render_orders_table(trades, symbol, point):
     open_trades = [t for t in trades if t["status"] == "open" and t["symbol"] == symbol]
@@ -677,17 +801,31 @@ def main():
     account = choose_account(accounts)
     connect(account)
 
-    symbol, tf_key = get_symbol_and_timeframe()
+    symbol_input, tf_key = get_symbol_and_timeframe()
     tf_const, period_seconds = TIMEFRAMES[tf_key]
     lot = get_lot()
 
-    if not mt5.symbol_select(symbol, True):
-        console.print(f"[red]Symbol '{symbol}' not found.[/red]")
+    symbol = resolve_symbol(symbol_input)
+    if not symbol:
+        console.print("[red]Could not find a valid symbol. Exiting.[/red]")
         mt5.shutdown()
         return
 
     symbol_info = mt5.symbol_info(symbol)
     point = symbol_info.point
+
+    # Adjust lot for margin
+    adjusted_lot, warn_msg = adjust_lot_for_margin(symbol, lot)
+    if warn_msg:
+        console.print(warn_msg)
+    if adjusted_lot <= 0:
+        console.print("[red]Cannot trade due to insufficient margin. Exiting.[/red]")
+        mt5.shutdown()
+        return
+    if adjusted_lot != lot:
+        console.print(f"[yellow]Lot adjusted from {lot} to {adjusted_lot} due to margin constraints.[/yellow]")
+        lot = adjusted_lot
+
     trades = load_trades()
 
     # Bale setup

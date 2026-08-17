@@ -45,8 +45,8 @@ HTML_REPORT = os.path.join(BASE_DIR, "backtest_report.html")
 USE_ADVANCED = True
 
 # --- Classic Settings ---
-TP_POINTS = 150
-SL_POINTS = 200
+TP_POINTS = 500
+SL_POINTS = 1500
 
 # --- Advanced Settings ---
 ATR_PERIOD = 14
