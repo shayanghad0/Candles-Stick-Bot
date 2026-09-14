@@ -1,25 +1,27 @@
 """
 Engulfing Pattern Watcher (MetaTrader5 + rich) – Live Real Trading
 ------------------------------------------------------------------
+- Uses the account already logged into the running MT5 terminal.
+- No .env file, no credential prompts.
 - Live candlestick chart (30 candles) + orders table + status line.
 - Engulfing detection at candle close.
 - Real trades: opens market orders with user-defined lot size, no SL/TP attached.
 - Monitors price; closes position when TP or SL level is hit.
 - JSON log, PNG snapshots (15 candles).
 - 50% TP notification in terminal.
+- When TP1 is hit, SL moves to entry ± (SL_POINTS / 2)  → half the original
+  risk is locked in as profit.
 - All data from MT5.
 
 Requirements:
     pip install MetaTrader5 rich mplfinance pandas
 
 Files:
-    .env          – MT5 account blocks
     trade.json    – trade log
     charts/       – snapshots
 """
 
 import os
-import re
 import json
 import time
 import traceback
@@ -40,14 +42,15 @@ from rich import box
 # Config
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ENV_PATH = os.path.join(BASE_DIR, ".env")
 TRADES_JSON = os.path.join(BASE_DIR, "trade.json")
 CHARTS_DIR = os.path.join(BASE_DIR, "charts")
 
-TP_POINTS = 150
-SL_POINTS = 200
-CANDLES_TO_SHOW = 30          # terminal display
-PNG_CANDLES = 15              # snapshot size
+TP_POINTS = 300
+SL_POINTS = 150
+# NOTE: The SL that gets applied after TP1 is hit is now SL_POINTS / 2 (in
+# profit direction). Example: entry=1000, SL=750 → new SL = 1125.
+CANDLES_TO_SHOW = 30            # terminal display
+PNG_CANDLES = 20                # snapshot size
 
 TIMEFRAMES = {
     "M1": (mt5.TIMEFRAME_M1, 60),
@@ -63,53 +66,8 @@ console = Console()
 os.makedirs(CHARTS_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# .env loading (MT5 accounts)
+# Symbol / lot prompts
 # ---------------------------------------------------------------------------
-def load_accounts(path=ENV_PATH):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f".env not found at {path}. Create it next to this script.")
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
-    blocks = re.split(r"^=+\s*$", content, flags=re.MULTILINE)
-    accounts = []
-    for block in blocks:
-        block = block.strip()
-        if not block:
-            continue
-        fields = {}
-        for line in block.splitlines():
-            if ":" not in line:
-                continue
-            key, value = line.split(":", 1)
-            fields[key.strip().lower()] = value.strip()
-        if "login" in fields and "password" in fields and "server" in fields:
-            accounts.append({
-                "name": fields.get("name", "Unnamed"),
-                "type": fields.get("type", ""),
-                "server": fields["server"],
-                "login": fields["login"],
-                "password": fields["password"],
-                "investor": fields.get("investor", ""),
-                "typeacc": fields.get("typeacc", ""),
-            })
-    return accounts
-
-def choose_account(accounts):
-    table = Table(title="Available Accounts")
-    table.add_column("#", justify="right")
-    table.add_column("Name")
-    table.add_column("Type")
-    table.add_column("Server")
-    table.add_column("Login")
-    for i, acc in enumerate(accounts, start=1):
-        table.add_row(str(i), acc["name"], acc["typeacc"] or acc["type"], acc["server"], acc["login"])
-    console.print(table)
-    while True:
-        choice = console.input(f"Select account [1-{len(accounts)}]: ").strip()
-        if choice.isdigit() and 1 <= int(choice) <= len(accounts):
-            return accounts[int(choice) - 1]
-        console.print("[red]Invalid choice, try again.[/red]")
-
 def get_symbol_and_lot():
     symbol = console.input("Symbol (e.g. EURUSD): ").strip().upper()
     while True:
@@ -120,7 +78,7 @@ def get_symbol_and_lot():
                 break
             else:
                 console.print("[red]Lot must be positive.[/red]")
-        except:
+        except Exception:
             console.print("[red]Invalid number.[/red]")
     console.print("Available timeframes: " + ", ".join(TIMEFRAMES.keys()))
     tf_input = console.input("Timeframe [default M1]: ").strip().upper() or "M1"
@@ -130,16 +88,28 @@ def get_symbol_and_lot():
     return symbol, lot, tf_input
 
 # ---------------------------------------------------------------------------
-# MT5 connection
+# MT5 connection – uses the account already logged into the running terminal
 # ---------------------------------------------------------------------------
-def connect(account):
+def connect():
     if not mt5.initialize():
-        raise RuntimeError(f"initialize() failed, error code = {mt5.last_error()}")
-    authorized = mt5.login(int(account["login"]), password=account["password"], server=account["server"])
-    if not authorized:
+        raise RuntimeError(
+            f"mt5.initialize() failed, error code = {mt5.last_error()}. "
+            "Make sure the MetaTrader 5 terminal is running and logged in."
+        )
+
+    acc_info = mt5.account_info()
+    if acc_info is None:
         mt5.shutdown()
-        raise RuntimeError(f"login() failed, error code = {mt5.last_error()}")
-    console.print(f"[green]Connected[/green] as {account['name']} ({account['login']}) on {account['server']}.")
+        raise RuntimeError(
+            "Could not read account info. The MT5 terminal appears to be "
+            "running but no account is currently logged in."
+        )
+
+    console.print(
+        f"[green]Connected[/green] as {acc_info.name} ({acc_info.login}) "
+        f"on {acc_info.server}  |  Balance: {acc_info.balance:.2f} {acc_info.currency}"
+    )
+    return acc_info
 
 # ---------------------------------------------------------------------------
 # OHLC helpers
@@ -316,7 +286,6 @@ def place_market_order(symbol, order_type, lot, point):
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         console.print(f"[red]Order failed: {result.comment} (code {result.retcode})[/red]")
         return None, None
-    # Get actual entry price from position
     positions = mt5.positions_get(ticket=result.order)
     if positions is not None and len(positions) > 0:
         entry = positions[0].price_open
@@ -324,10 +293,6 @@ def place_market_order(symbol, order_type, lot, point):
     return result.order, price
 
 def close_position(ticket):
-    """
-    Close an open position by sending an opposite market order.
-    For a BUY position, send a SELL; for a SELL position, send a BUY.
-    """
     pos = mt5.positions_get(ticket=ticket)
     if pos is None or len(pos) == 0:
         return None
@@ -341,10 +306,10 @@ def close_position(ticket):
         return None
 
     if pos.type == mt5.POSITION_TYPE_BUY:
-        order_type = mt5.ORDER_TYPE_SELL        # <-- fixed
+        order_type = mt5.ORDER_TYPE_SELL
         price = tick.bid
     else:
-        order_type = mt5.ORDER_TYPE_BUY         # <-- fixed
+        order_type = mt5.ORDER_TYPE_BUY
         price = tick.ask
 
     request = {
@@ -372,13 +337,11 @@ def open_trade(trades, direction, entry_price, point, symbol, lot, tf_const, liv
     sl_price = entry_price - SL_POINTS * point if direction == "bullish" else entry_price + SL_POINTS * point
     tp1_price = entry_price + (TP_POINTS / 2) * point if direction == "bullish" else entry_price - (TP_POINTS / 2) * point
 
-    # Place real order
     ticket, real_entry = place_market_order(symbol, order_type, lot, point)
     if ticket is None:
         live_console.log("[red]Order placement failed, skipping trade.[/red]")
         return None
 
-    # Snapshot (using actual entry)
     snapshot_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, PNG_CANDLES)
     chart_path = None
     if snapshot_rates is not None and len(snapshot_rates) > 0:
@@ -407,6 +370,7 @@ def open_trade(trades, direction, entry_price, point, symbol, lot, tf_const, liv
         "chart_open": chart_path,
         "chart_close": None,
         "half_tp_notified": False,
+        "sl_moved": False,
     }
     trades.append(trade)
     save_trades(trades)
@@ -446,12 +410,14 @@ def check_open_trades(trades, symbol, point, lot, tf_const, live_console):
         pos = pos[0]
         current_price = pos.price_current
         direction = trade["direction"]
+        entry_price = trade["entry_price"]
 
-        # ---- 50% TP notification ----
+        # ---- 50% TP notification & Moving SL ----
         if not trade.get("half_tp_notified", False):
             tp1 = trade.get("tp1_price")
             if tp1 is not None:
-                if (direction == "buy" and current_price >= tp1) or (direction == "sell" and current_price <= tp1):
+                tp1_hit = (direction == "buy" and current_price >= tp1) or (direction == "sell" and current_price <= tp1)
+                if tp1_hit:
                     trade["half_tp_notified"] = True
                     changed = True
                     profit = pos.profit
@@ -460,6 +426,25 @@ def check_open_trades(trades, symbol, point, lot, tf_const, live_console):
                         f"Level: {tp1:.5f}  Profit: {profit:.2f}",
                         title="Partial TP Alert",
                     ))
+
+                    # ---- Move SL to entry ± (SL_POINTS / 2) ----
+                    # Example: entry = 1000, SL = 750 (250 pts below entry)
+                    #          → new SL = 1000 + 125 = 1125
+                    if not trade.get("sl_moved", False):
+                        half_sl_points = SL_POINTS / 2.0
+                        if direction == "buy":
+                            new_sl = entry_price + half_sl_points * point
+                        else:
+                            new_sl = entry_price - half_sl_points * point
+
+                        trade["sl_price"] = new_sl
+                        trade["sl_moved"] = True
+                        changed = True
+                        live_console.log(Panel(
+                            f"[bold cyan]SL moved to +{half_sl_points:.0f} pts[/bold cyan] "
+                            f"({new_sl:.5f}) for trade #{trade['id']}",
+                            title="SL Adjustment",
+                        ))
 
         # ---- Full TP / SL ----
         hit = None
@@ -475,7 +460,7 @@ def check_open_trades(trades, symbol, point, lot, tf_const, live_console):
                 hit = "sl"
 
         if hit:
-            profit_before_close = pos.profit  # capture before closing
+            profit_before_close = pos.profit
             close_res = close_position(ticket)
             if close_res is None or close_res.retcode != mt5.TRADE_RETCODE_DONE:
                 console.print(f"[red]Failed to close position {ticket}: {close_res.comment if close_res else 'no response'}[/red]")
@@ -492,7 +477,6 @@ def check_open_trades(trades, symbol, point, lot, tf_const, live_console):
             trade["pnl_points"] = round(pnl_points, 1)
             trade["pnl_percent"] = round(pnl_percent, 3)
 
-            # Snapshot only on full TP
             if hit == "tp":
                 snapshot_rates = mt5.copy_rates_from_pos(symbol, tf_const, 1, PNG_CANDLES)
                 if snapshot_rates is not None and len(snapshot_rates) > 0:
@@ -562,9 +546,10 @@ def render_account_and_orders(trades, symbol, point):
             profit_str = "—"
             pnl_str = "—"
         color = "green" if profit_str != "—" and float(profit_str) >= 0 else "red" if profit_str != "—" else "white"
+        sl_display = f"{t['sl_price']:.5f}"
         table.add_row(
             str(t["id"]), t["direction"].upper(), f"{t['entry_price']:.5f}",
-            f"{t['tp_price']:.5f}", f"{t['sl_price']:.5f}",
+            f"{t['tp_price']:.5f}", sl_display,
             f"[{color}]{profit_str}[/{color}]", f"[{color}]{pnl_str}[/{color}]",
         )
     return Group(acc_text, table)
@@ -573,12 +558,11 @@ def render_account_and_orders(trades, symbol, point):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    accounts = load_accounts()
-    if not accounts:
-        console.print("[red]No accounts found in .env.[/red]")
+    try:
+        connect()
+    except Exception as e:
+        console.print(f"[red]{e}[/red]")
         return
-    account = choose_account(accounts)
-    connect(account)
 
     symbol, lot, tf_key = get_symbol_and_lot()
     tf_const, period_seconds = TIMEFRAMES[tf_key]
@@ -594,13 +578,13 @@ def main():
 
     console.print(Panel(
         f"Watching [bold]{symbol}[/bold] on [bold]{tf_key}[/bold]\n"
-        f"Lot: {lot}   TP: {TP_POINTS} pts   SL: {SL_POINTS} pts\n"
+        f"Lot: {lot}   TP: {TP_POINTS} pts   SL: {SL_POINTS} pts   "
+        f"Move SL to +{SL_POINTS/2:.0f} pts at TP1\n"
         f"Trade log: {TRADES_JSON}   Charts: {CHARTS_DIR}",
         title="Engulfing Watcher (Live)",
     ))
     console.print("[dim]Press Ctrl+C to stop.[/dim]\n")
 
-    # Initial live candle time
     live = mt5.copy_rates_from_pos(symbol, tf_const, 0, 1)
     if live is None or len(live) == 0:
         console.print("[red]Could not fetch initial live candle.[/red]")

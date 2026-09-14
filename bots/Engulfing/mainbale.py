@@ -3,19 +3,23 @@ Engulfing Pattern Watcher (MetaTrader5 + rich) – Live + Real Trading + Bale
 -----------------------------------------------------------------------------
 - Live candlestick chart (30 candles) + orders table + status line.
 - Engulfing detection at candle close → opens real market order (no broker TP/SL).
-- At 50% TP: closes half of the position, leaves the rest to full TP/SL.
+- At 50% TP (TP1): closes half of the position, and moves SL to the midpoint
+  between TP1 and the original SL.  new_sl = (tp1_price + old_sl_price) / 2
 - Full TP/SL: closes remaining volume manually.
 - Bale integration: sends open/close charts & SL/TP1/TP2 messages to channel.
 - Start/stop messages to admin.
 - Prompts for lot size.
 - Automatically adjusts lot if margin is insufficient (manual calculation fallback).
 
+Session handling:
+    - If MetaTrader5 terminal is already logged in, that account is reused.
+    - Otherwise the script prompts for Login / Password / Server.
+
 Requirements:
     pip install MetaTrader5 rich mplfinance pandas requests
 
 Files:
-    .env          – MT5 accounts
-    api.env       – Bale tokens (Api, Group, Channel, Admin)
+    api.env       – Bale tokens (Api, Group, Channel, Admin)   [optional]
     trades.json   – trade log
     charts/       – snapshots
 """
@@ -26,6 +30,7 @@ import json
 import time
 import sys
 import traceback
+import getpass
 from datetime import datetime
 
 import MetaTrader5 as mt5
@@ -44,7 +49,6 @@ from rich import box
 # Config
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ENV_PATH = os.path.join(BASE_DIR, ".env")
 API_ENV_PATH = os.path.join(BASE_DIR, "api.env")
 TRADES_JSON = os.path.join(BASE_DIR, "trades.json")
 CHARTS_DIR = os.path.join(BASE_DIR, "charts")
@@ -123,52 +127,49 @@ class BaleNotifier:
 bale: BaleNotifier = None
 
 # ---------------------------------------------------------------------------
-# MT5 account loading
+# MT5 connection (no .env – uses current session OR prompts for credentials)
 # ---------------------------------------------------------------------------
-def load_accounts(path=ENV_PATH):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f".env not found at {path}.")
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
-    blocks = re.split(r"^=+\s*$", content, flags=re.MULTILINE)
-    accounts = []
-    for block in blocks:
-        block = block.strip()
-        if not block:
-            continue
-        fields = {}
-        for line in block.splitlines():
-            if ":" not in line:
-                continue
-            key, value = line.split(":", 1)
-            fields[key.strip().lower()] = value.strip()
-        if "login" in fields and "password" in fields and "server" in fields:
-            accounts.append({
-                "name": fields.get("name", "Unnamed"),
-                "type": fields.get("type", ""),
-                "server": fields["server"],
-                "login": fields["login"],
-                "password": fields["password"],
-                "investor": fields.get("investor", ""),
-                "typeacc": fields.get("typeacc", ""),
-            })
-    return accounts
+def connect_interactive():
+    """
+    Connects to MetaTrader5.
+    - If the terminal already has an active logged-in account, that one is used.
+    - Otherwise, prompts for login / password / server.
+    """
+    if not mt5.initialize():
+        raise RuntimeError(f"initialize() failed, error code = {mt5.last_error()}")
 
-def choose_account(accounts):
-    table = Table(title="Available Accounts")
-    table.add_column("#", justify="right")
-    table.add_column("Name")
-    table.add_column("Type")
-    table.add_column("Server")
-    table.add_column("Login")
-    for i, acc in enumerate(accounts, start=1):
-        table.add_row(str(i), acc["name"], acc["typeacc"] or acc["type"], acc["server"], acc["login"])
-    console.print(table)
+    acc_info = mt5.account_info()
+    if acc_info is not None:
+        console.print(
+            f"[green]Connected[/green] to already logged-in account: "
+            f"[bold]{acc_info.login}[/bold] on [bold]{acc_info.server}[/bold] "
+            f"(Name: {acc_info.name}, Balance: {acc_info.balance} {acc_info.currency})"
+        )
+        return acc_info
+
+    # Not logged in – ask user
+    console.print("[yellow]No active MT5 session detected. Please enter account credentials.[/yellow]")
     while True:
-        choice = console.input(f"Select account [1-{len(accounts)}]: ").strip()
-        if choice.isdigit() and 1 <= int(choice) <= len(accounts):
-            return accounts[int(choice) - 1]
-        console.print("[red]Invalid choice, try again.[/red]")
+        login_str = console.input("Login: ").strip()
+        if login_str.isdigit():
+            login = int(login_str)
+            break
+        console.print("[red]Login must be numeric.[/red]")
+
+    password = getpass.getpass("Password: ").strip()
+    server = console.input("Server (e.g. ICMarkets-Live01): ").strip()
+
+    if not mt5.login(login, password=password, server=server):
+        mt5.shutdown()
+        raise RuntimeError(f"login() failed, error code = {mt5.last_error()}")
+
+    acc_info = mt5.account_info()
+    console.print(
+        f"[green]Connected[/green] as [bold]{acc_info.name}[/bold] "
+        f"({acc_info.login}) on {acc_info.server}."
+    )
+    return acc_info
+
 
 def get_symbol_and_timeframe():
     symbol = console.input("Symbol (e.g. EURUSD): ").strip().upper()
@@ -178,6 +179,7 @@ def get_symbol_and_timeframe():
         console.print(f"[yellow]Unknown timeframe '{tf_input}', defaulting to M1.[/yellow]")
         tf_input = "M1"
     return symbol, tf_input
+
 
 def get_lot():
     while True:
@@ -192,52 +194,28 @@ def get_lot():
             console.print("[red]Invalid number.[/red]")
 
 # ---------------------------------------------------------------------------
-# MT5 connection
-# ---------------------------------------------------------------------------
-def connect(account):
-    if not mt5.initialize():
-        raise RuntimeError(f"initialize() failed, error code = {mt5.last_error()}")
-    authorized = mt5.login(int(account["login"]), password=account["password"], server=account["server"])
-    if not authorized:
-        mt5.shutdown()
-        raise RuntimeError(f"login() failed, error code = {mt5.last_error()}")
-    console.print(f"[green]Connected[/green] as {account['name']} ({account['login']}) on {account['server']}.")
-
-# ---------------------------------------------------------------------------
 # Improved symbol selection with fallback and listing
 # ---------------------------------------------------------------------------
 def resolve_symbol(user_symbol):
-    """
-    Tries to find a valid symbol on the broker.
-    If user_symbol is not found, searches for symbols containing that text
-    (case-insensitive) and lets the user choose.
-    Also attempts to strip common suffixes like '.d', '.m', '.pro' etc.
-    """
-    # First, try exactly as entered
     if mt5.symbol_select(user_symbol, True):
         return user_symbol
 
-    # Get all symbols for search
     all_symbols = mt5.symbols_get()
     if not all_symbols:
         return None
 
     symbol_names = [s.name for s in all_symbols]
 
-    # Try stripped version: remove common suffixes
     stripped = re.sub(r'\.(d|m|pro|ecn|raw|stp|demo|real)$', '', user_symbol, flags=re.IGNORECASE)
     if stripped != user_symbol:
-        # Check if stripped exists
         for name in symbol_names:
             if name.upper() == stripped.upper():
                 console.print(f"[green]Found symbol '{name}' (suggested from '{user_symbol}'). Using it.[/green]")
                 mt5.symbol_select(name, True)
                 return name
 
-    # Search for symbols containing the user input (case-insensitive)
     matches = [name for name in symbol_names if user_symbol.lower() in name.lower()]
     if not matches:
-        # If no match, also try searching by common names (e.g. for gold)
         if "XAU" in user_symbol or "GOLD" in user_symbol:
             gold_matches = [name for name in symbol_names if "XAU" in name.upper() or "GOLD" in name.upper()]
             if gold_matches:
@@ -253,7 +231,6 @@ def resolve_symbol(user_symbol):
         mt5.symbol_select(chosen, True)
         return chosen
 
-    # Multiple matches – let user choose
     console.print(f"[yellow]Multiple symbols match '{user_symbol}':[/yellow]")
     for i, name in enumerate(matches, start=1):
         console.print(f"  {i}. {name}")
@@ -269,49 +246,42 @@ def resolve_symbol(user_symbol):
 # Margin adjustment with manual fallback
 # ---------------------------------------------------------------------------
 def adjust_lot_for_margin(symbol, requested_lot):
-    """
-    Checks available margin and adjusts lot if needed.
-    Uses manual calculation if margin_initial is missing.
-    Returns (adjusted_lot, warning_message)
-    """
     account_info = mt5.account_info()
     if account_info is None:
         return requested_lot, "[yellow]Cannot get account info – using requested lot.[/yellow]"
-    
+
     free_margin = account_info.margin_free
     if free_margin <= 0:
         return 0.0, "[red]Free margin is zero or negative – cannot trade.[/red]"
-    
+
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
         return requested_lot, "[yellow]Cannot get symbol info – using requested lot.[/yellow]"
-    
-    # Try to get margin per lot from symbol info
+
     margin_per_lot = symbol_info.margin_initial
     if margin_per_lot is None or margin_per_lot <= 0:
         margin_per_lot = symbol_info.margin_maintenance
         if margin_per_lot is None or margin_per_lot <= 0:
-            # Manual calculation
             contract_size = symbol_info.trade_contract_size
             if contract_size is None or contract_size <= 0:
-                contract_size = 100  # default for many forex/CFDs
+                contract_size = 100
             leverage = account_info.leverage
             if leverage is None or leverage <= 0:
-                leverage = 100  # fallback
-            # Get current price (ask for buy, bid for sell – we use ask for conservative estimate)
+                leverage = 100
             tick = mt5.symbol_info_tick(symbol)
             if tick is None:
                 return requested_lot, "[yellow]Cannot get tick – using requested lot.[/yellow]"
             price = tick.ask
             margin_per_lot = (contract_size * price) / leverage
-            console.print(f"[dim]Manual margin per lot: {margin_per_lot:.2f} (ContractSize={contract_size}, Price={price}, Leverage={leverage})[/dim]")
-    
+            console.print(f"[dim]Manual margin per lot: {margin_per_lot:.2f} "
+                          f"(ContractSize={contract_size}, Price={price}, Leverage={leverage})[/dim]")
+
     if margin_per_lot <= 0:
         return requested_lot, "[yellow]Margin per lot still unknown – using requested lot.[/yellow]"
-    
+
     max_lot_possible = free_margin / margin_per_lot
-    max_lot_safe = max_lot_possible * 0.9  # safety buffer
-    
+    max_lot_safe = max_lot_possible * 0.9
+
     if requested_lot <= max_lot_safe:
         return requested_lot, None
     else:
@@ -483,7 +453,6 @@ def place_market_order(symbol, direction, volume, point, live_console):
 # Close a specific volume from a position (used for partial and full close)
 # ---------------------------------------------------------------------------
 def close_position_volume(symbol, ticket, volume, live_console):
-    """Close `volume` lots from position `ticket`."""
     tick = mt5.symbol_info_tick(symbol)
     if not tick:
         return False
@@ -538,14 +507,13 @@ def open_trade(trades, direction, entry_price, point, symbol, tf_const, lot, liv
         order_type = "Short"
         mt5_direction = "sell"
 
-    # Adjust lot again (in case margin changed)
     adjusted_lot, warn_msg = adjust_lot_for_margin(symbol, lot)
     if warn_msg:
         live_console.log(warn_msg)
     if adjusted_lot <= 0:
         live_console.log("[red]Lot too small to trade – skipping.[/red]")
         return
-    lot = adjusted_lot  # use adjusted
+    lot = adjusted_lot
 
     ticket = place_market_order(symbol, mt5_direction, lot, point, live_console)
     if not ticket:
@@ -569,6 +537,7 @@ def open_trade(trades, direction, entry_price, point, symbol, tf_const, lot, liv
         "entry_time": datetime.now().isoformat(timespec="seconds"),
         "tp_price": tp_price,
         "sl_price": sl_price,
+        "sl_original": sl_price,
         "tp_points": TP_POINTS,
         "sl_points": SL_POINTS,
         "status": "open",
@@ -583,7 +552,7 @@ def open_trade(trades, direction, entry_price, point, symbol, tf_const, lot, liv
         "tp1_price": tp1_price,
         "direction_raw": direction,
         "ticket": ticket,
-        "lot": lot,            # current remaining lot
+        "lot": lot,
         "initial_lot": lot,
     }
     trades.append(trade)
@@ -609,7 +578,7 @@ def open_trade(trades, direction, entry_price, point, symbol, tf_const, lot, liv
         bale.notify_channel_photo(chart_path, caption)
 
 # ---------------------------------------------------------------------------
-# Monitor positions (with half-volume close at 50% TP)
+# Monitor positions (with half-volume close at 50% TP + SL shift to midpoint)
 # ---------------------------------------------------------------------------
 def monitor_positions(trades, symbol, point, tf_const, live_console):
     tick = mt5.symbol_info_tick(symbol)
@@ -634,7 +603,7 @@ def monitor_positions(trades, symbol, point, tf_const, live_console):
         current_price = pos.price_current
         current_lot = pos.volume
 
-        # --- 50% TP (partial close) ---
+        # --- 50% TP (partial close) + SL shift ---
         if not trade.get("half_tp_notified", False):
             tp1 = trade.get("tp1_price")
             if tp1 is not None:
@@ -648,6 +617,43 @@ def monitor_positions(trades, symbol, point, tf_const, live_console):
                         if close_position_volume(symbol, trade["ticket"], half_lot, live_console):
                             trade["half_tp_notified"] = True
                             trade["lot"] = current_lot - half_lot
+
+                            # -------------------------------------------------
+                            # Move SL to midpoint between TP1 and original SL
+                            #   new_sl = (tp1_price + old_sl_price) / 2
+                            # -------------------------------------------------
+                            old_sl = trade.get("sl_price", trade.get("sl_original"))
+                            new_sl = (tp1 + old_sl) / 2.0
+
+                            # Round to symbol tick size
+                            sym_info = mt5.symbol_info(symbol)
+                            tick_size = (sym_info.trade_tick_size if sym_info
+                                         and sym_info.trade_tick_size else point)
+                            new_sl = round(round(new_sl / tick_size) * tick_size, 8)
+
+                            trade["sl_original"] = old_sl
+                            trade["sl_price"] = new_sl
+
+                            # Try to push SL to broker (optional — bot enforces it locally too)
+                            try:
+                                req = {
+                                    "action":   mt5.TRADE_ACTION_SLTP,
+                                    "symbol":   symbol,
+                                    "position": trade["ticket"],
+                                    "sl":       new_sl,
+                                    "tp":       0.0,
+                                    "magic":    MAGIC,
+                                }
+                                res = mt5.order_send(req)
+                                if res is None or res.retcode != mt5.TRADE_RETCODE_DONE:
+                                    live_console.log(
+                                        f"[yellow]Broker SL update skipped/failed: "
+                                        f"{res.retcode if res else 'None'} "
+                                        f"{res.comment if res else ''}[/yellow]"
+                                    )
+                            except Exception as e:
+                                live_console.log(f"[yellow]Broker SL update error: {e}[/yellow]")
+
                             changed = True
 
                             sign = 1 if trade["direction"] == "buy" else -1
@@ -655,26 +661,30 @@ def monitor_positions(trades, symbol, point, tf_const, live_console):
                             closed_pnl_percent = sign * (current_price - trade["entry_price"]) / trade["entry_price"] * 100
 
                             live_console.log(Panel(
-                                f"[bold yellow]50% TP reached – closed {half_lot} lot[/bold yellow] on trade #{trade['id']} ({trade['symbol']})\n"
-                                f"Level: {tp1:.5f}  PNL: {closed_pnl_points:.1f} pts ({closed_pnl_percent:.2f}%)",
-                                title="Partial TP + Half Close",
+                                f"[bold yellow]50% TP reached – closed {half_lot} lot[/bold yellow] "
+                                f"on trade #{trade['id']} ({trade['symbol']})\n"
+                                f"Level: {tp1:.5f}  PNL: {closed_pnl_points:.1f} pts "
+                                f"({closed_pnl_percent:.2f}%)\n"
+                                f"[bold]SL moved:[/bold] {old_sl:.5f} → [green]{new_sl:.5f}[/green]",
+                                title="Partial TP + Half Close + SL Shift",
                             ))
 
                             if bale and bale.channel_id:
                                 bale.notify_channel(
                                     f"order id on json db : {trade['id']}\n"
-                                    f"is hit tp 1 on price TP 1 : {tp1:.5f} => 75point\n"
+                                    f"is hit tp 1 on price TP 1 : {tp1:.5f}\n"
                                     f"Half volume ({half_lot} lot) closed.\n"
                                     f"PNL per % : {closed_pnl_percent:.2f}%\n"
                                     f"PNL per point : {closed_pnl_points:.1f}\n"
-                                    f"Remaining lot: {trade['lot']}"
+                                    f"Remaining lot: {trade['lot']}\n"
+                                    f"SL moved: {old_sl:.5f} → {new_sl:.5f}"
                                 )
                         else:
                             trade["half_tp_notified"] = True
                             changed = True
                             live_console.log(f"[red]Failed to partial close for trade #{trade['id']}, flagged as notified.[/red]")
 
-        # --- Full TP/SL ---
+        # --- Full TP/SL (uses possibly-updated trade["sl_price"]) ---
         hit = None
         if trade["direction"] == "buy":
             if current_price >= trade["tp_price"]:
@@ -794,12 +804,12 @@ def render_orders_table(trades, symbol, point):
 def main():
     global bale
 
-    accounts = load_accounts()
-    if not accounts:
-        console.print("[red]No accounts found in .env.[/red]")
+    # Connect (uses active MT5 session, or prompts for credentials)
+    try:
+        connect_interactive()
+    except Exception as e:
+        console.print(f"[red]{e}[/red]")
         return
-    account = choose_account(accounts)
-    connect(account)
 
     symbol_input, tf_key = get_symbol_and_timeframe()
     tf_const, period_seconds = TIMEFRAMES[tf_key]
@@ -828,7 +838,7 @@ def main():
 
     trades = load_trades()
 
-    # Bale setup
+    # Bale setup (optional)
     bale = None
     if os.path.exists(API_ENV_PATH):
         try:
